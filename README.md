@@ -28,13 +28,13 @@ The repository contains code for the image classification, text classification, 
 
 ---
 ### Citing
+If you find our repository useful, please consider citing:
 ```
-```
-<!-- 
-If you find RAVEN useful, please consider citing:
-```
-@article{jeon2024raven,
-  title={Weak-to-Strong Generalization under Distribution Shifts},
-  author={Jeon, Myeongho and Sobotka, Jan and Choi, Suhwan and Brbic, Maria},
+@inproceedings{jeon2025weaktostrong,
+    title={Weak-to-Strong Generalization under Distribution Shifts},
+    author={Myeongho Jeon and Jan Sobotka and Suhwan Choi and Maria Brbi\'c},
+    booktitle={The Thirty-ninth Annual Conference on Neural Information Processing Systems},
+    year={2025},
+    url={https://openreview.net/forum?id=fEg31YjLct}
 }
-``` -->
+```
