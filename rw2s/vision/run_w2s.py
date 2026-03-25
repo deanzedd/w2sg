@@ -1,3 +1,6 @@
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
 import os
 import sys
 from copy import deepcopy
@@ -10,14 +13,15 @@ import dill
 from loguru import logger
 from ruamel.yaml import YAML
 import torch
+from torch.utils.data import DataLoader, random_split, ConcatDataset
 import wandb
 import lovely_tensors as lt
 from functools import partial
 
 from rw2s.utils import preload, get_cache_paths, seed_all, slugify
 from rw2s.losses import LOSS_DICT
-from rw2s.train import train, train_head
-from rw2s.vision.data import get_data, filter_dl_by_metadata
+from rw2s.train import train, train_head, train_head_DG, train_head_DG_selfMix
+from rw2s.vision.data import get_data, filter_dl_by_metadata, get_dataloader, get_filtered_dataset
 from rw2s.vision.models import get_model, freeze_backbone, LinearProbeClassifier
 from rw2s.vision.ensemble import Ensemble, EnsembleParticipant, EnsembleDisagreementSchedule
 
@@ -72,11 +76,143 @@ def get_weak_model(cfg, model_cfg, logger, wdb_run, n_classes, model_idx=None):
         if cfg["data"].get("subsplit_train", None) is None:
             train_dl, val_dl = dls["train"], dls["id_val"]
         else:
-            train_dl, val_dl = dls["train_split0"], dls["train_split1"] # subsplit train into train and val
+            # train_dl, val_dl = dls["train_split0"], dls["train_split1"] # subsplit train into train and val
+            if model_cfg["train_cfg"]["domain_start_end_idxs"]==[3, 4]:
+                #breakpoint()
+                train_dl, val_dl = dls["val_split0"], dls["val_split1"]
+            elif model_cfg["train_cfg"]["domain_start_end_idxs"]==[4, 5]:
+                train_dl, val_dl = dls["test_split0"], dls["test_split1"]
+            else:
+                # breakpoint()
+                train_dl, val_dl = dls["train_split0"], dls["train_split1"] # subsplit train into train and val
+        # if model_cfg["train_cfg"]["domain_start_end_idxs"] is not None:
         if model_cfg["train_cfg"]["domain_start_end_idxs"] is not None:
-            train_dl, domain_start_end_val_range = filter_dl_by_metadata(dataloader=train_dl, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_idxs=model_cfg["train_cfg"]["domain_start_end_idxs"])
-            val_dl, _ = filter_dl_by_metadata(dataloader=val_dl, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_val_range=model_cfg["train_cfg"]["domain_start_end_idxs"])
+            if model_cfg["train_cfg"]["domain_start_end_idxs"]==[3, 4]:
+                #breakpoint()
+                train_dl, val_dl = dls["val_split0"], dls["val_split1"]
+            elif model_cfg["train_cfg"]["domain_start_end_idxs"]==[4, 5]:
+                # breakpoint()
+                train_dl, val_dl = dls["test_split0"], dls["test_split1"]
+                #breakpoint()
+            else:
+                train_dl, domain_start_end_val_range = filter_dl_by_metadata(dataloader=train_dl, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_idxs=model_cfg["train_cfg"]["domain_start_end_idxs"])
+                val_dl, _ = filter_dl_by_metadata(dataloader=val_dl, 
+                                                meta_key=model_cfg["train_cfg"]["domain_group"], 
+                                                meta_start_end_val_range=domain_start_end_val_range) # meta_start_end_val_range=model_cfg["train_cfg"]["domain_start_end_idxs"]
+        
+        
+        
+        ### Lọc data để train weak model theo multi domain
+        
+        # # 1. Hàm lọc DATASET theo danh sách các domain cụ thể (Hỗ trợ nhảy cóc như [0, 1, 4])
+        # def get_filtered_dataset_by_domains(dset, meta_key, target_domains):
+        #     meta_key_idx = dset.metadata_fields.index(meta_key)
+            
+        #     # Lấy các giá trị (VD: tên bệnh viện thực tế)
+        #     unique_vals = dset.metadata_array[:, meta_key_idx].unique(sorted=True)
+            
+        #     # Lấy giá trị thực tế tương ứng với vị trí index được yêu cầu
+        #     target_vals = torch.tensor([unique_vals[i] for i in target_domains], device=dset.metadata_array.device)
+            
+        #     # Lọc index của những sample thuộc về các domain mục tiêu
+        #     mask = torch.isin(dset.metadata_array[:, meta_key_idx], target_vals)
+        #     filter_in_idxs = torch.where(mask)[0].cpu().numpy()
+        #     from wilds.datasets.wilds_dataset import WILDSSubset
+        #     return WILDSSubset(dataset=dset, indices=filter_in_idxs, transform=None)
 
+        # 2. Lấy dataset train gốc
+        train_dataset = dsets["train"]
+
+        if cfg["data"]["name"] == "camelyon17":
+            
+            from data import TFORMS
+            tform = TFORMS[cfg["data"]["name"]]
+            
+            if model_cfg["train_cfg"]["test_domain"] == 4:
+                total_len = len(dsets["train"])
+                train_len = int(0.8 * total_len)
+                val_len = total_len - train_len
+                generator = torch.Generator().manual_seed(cfg.get("seed", 0))
+                train_subset, val_subset = random_split(dsets["train"], lengths=[train_len, val_len], generator=generator)
+                # target_domains = [0, 1, 2]      # Test 4 -> Bỏ 3 (làm Val) -> Train: 0, 1, 2
+            elif model_cfg["train_cfg"]["test_domain"] == 3:
+                train_dl0 = get_filtered_dataset(dset=train_dataset, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_idxs=[0, 1], transform=None)
+                train_dl1 = get_filtered_dataset(dset=train_dataset, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_idxs=[1, 2], transform=None)
+                ###
+                datasets = ConcatDataset([train_dl0, train_dl1, dsets["test"]])
+                total_len = len(datasets)
+                train_len = int(0.8 * total_len)
+                val_len = total_len - train_len
+                generator = torch.Generator().manual_seed(cfg.get("seed", 0))
+                train_subset, val_subset = random_split(datasets, lengths=[train_len, val_len], generator=generator)
+                # target_domains = [0, 1, 4]      # Test 3 -> Bỏ 2 (làm Val) -> Train: 0, 1, 4
+            elif model_cfg["train_cfg"]["test_domain"] == 2:
+                train_dl0 = get_filtered_dataset(dset=train_dataset, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_idxs=[0, 1], transform=None)
+                
+                ###
+                datasets = ConcatDataset([train_dl0, dsets["val"], dsets["test"]])
+                total_len = len(datasets)
+                train_len = int(0.8 * total_len)
+                val_len = total_len - train_len
+                generator = torch.Generator().manual_seed(cfg.get("seed", 0))
+                train_subset, val_subset = random_split(datasets, lengths=[train_len, val_len], generator=generator)
+                # target_domains = [0, 3, 4]      # Test 2 -> Bỏ 1 (làm Val) -> Train: 0, 3, 4
+            elif model_cfg["train_cfg"]["test_domain"] == 1:
+                train_dl2 = get_filtered_dataset(dset=train_dataset, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_idxs=[2, 3], transform=None)
+
+                ###
+                datasets = ConcatDataset([train_dl2, dsets["val"], dsets["test"]])
+                total_len = len(datasets)
+                train_len = int(0.8 * total_len)
+                val_len = total_len - train_len
+                generator = torch.Generator().manual_seed(cfg.get("seed", 0))
+                train_subset, val_subset = random_split(datasets, lengths=[train_len, val_len], generator=generator)
+                # target_domains = [2, 3, 4]      # Test 1 -> Bỏ 0 (làm Val) -> Train: 2, 3, 4
+            elif model_cfg["train_cfg"]["test_domain"] == 0:
+                train_dl1 = get_filtered_dataset(dset=train_dataset, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_idxs=[1, 2], transform=None)
+                train_dl2 = get_filtered_dataset(dset=train_dataset, meta_key=model_cfg["train_cfg"]["domain_group"], meta_start_end_idxs=[2, 3], transform=None)
+                
+                ###
+                datasets = ConcatDataset([train_dl1, train_dl2, dsets["val"]])
+                total_len = len(datasets)
+                train_len = int(0.8 * total_len)
+                val_len = total_len - train_len
+                generator = torch.Generator().manual_seed(cfg.get("seed", 0))
+                train_subset, val_subset = random_split(datasets, lengths=[train_len, val_len], generator=generator)
+                # target_domains = [1, 2, 3]      # Test 0 -> Bỏ 4 (làm Val) -> Train: 1, 2, 3
+
+            
+
+            # 6. Tạo 2 DataLoader riêng biệt để đưa vào train_head_DG (Đảm bảo shuffle=False)
+            train_dl = DataLoader(train_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+            val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+        elif cfg["data"]["name"] == "pacs":
+            total_len = len(train_dataset)
+            train_len = int(0.8 * total_len)
+            val_len = total_len - train_len
+            generator = torch.Generator().manual_seed(cfg.get("seed", 0))
+            train_subset, val_subset = random_split(train_dataset, lengths=[train_len, val_len], generator=generator)
+            train_dl = DataLoader(train_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+            val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+        elif cfg["data"]["name"] == "vlcs":
+            total_len = len(train_dataset)
+            train_len = int(0.8 * total_len)
+            val_len = total_len - train_len
+            generator = torch.Generator().manual_seed(cfg.get("seed", 0))
+            train_subset, val_subset = random_split(train_dataset, lengths=[train_len, val_len], generator=generator)
+            train_dl = DataLoader(train_subset, batch_size=cfg["data"]["batch_size"], shuffle=True, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+            val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+                
+                
+                
+        
+        
+        ###
+        
+        
+        
+        
+        
         ### train
         logger.info(f"Training the weak model ({len(train_dl.dataset)} training samples, {len(val_dl.dataset) if val_dl else 0} validation samples)...")
         save_path = os.path.join(cfg["save_path"], slugify(cfg['data']['name']), "models",
@@ -209,30 +345,130 @@ def run_w2s(cfg, logger, dls, n_classes, results, teacher_model, student_model, 
 
     ### run
     seed_all(cfg["seed"])
-    results, student_model_probe = train_head(
-        teacher_model=teacher_model,
-        student_model=student_model,
-        dataloader=dls[cfg["w2s"]["test_data_key"]],
-        cfg=cfg,
-        cached_labels_path=cached_labels_path,
-        cached_embs_path=cached_embs_path,
-        logger=logger,
-        results=results,
-        rng=np.random.default_rng(cfg["seed"]),
-        n_classes=n_classes,
-        return_data=False,
-        additional_eval_data=None if not cfg["w2s"]["eval_on_id_val_data"] else {
-            "id_val_all": (student_model_probe_data["x"], student_model_probe_data["y"]),
-            "id_val_all_weak": (student_model_probe_data["x"], torch.argmax(student_model_probe_data["yw"], dim=1)),
-            "id_val_val": (student_model_probe_data["x_val"], student_model_probe_data["y_val"]),
-            "id_val_val_weak": (student_model_probe_data["x_val"], student_model_probe_data["yw_val"]),
-            "id_val_test": (student_model_probe_data["x_test"], student_model_probe_data["y_test"]),
-            "id_val_test_weak": (student_model_probe_data["x_test"], student_model_probe_data["yw_test"]),
-        },
-        before_optim_run_callback_weak=before_optim_run_callback_weak,
-        before_batch_callback_weak=before_batch_callback_weak,
-        after_batch_callback_weak=after_batch_callback_weak,
-    )
+    if cfg["setting_DG"]:
+        dsets, dlss = get_data(cfg=cfg["data"])
+        ### p (val_gt_labels != val_student_gt_labels).sum().item()
+        
+        # 1. Lấy dữ liệu train gốc
+        train_dataset = dsets["train"]
+
+        if cfg["data"]["name"] == "camelyon17":
+        
+            # 2. Định nghĩa hàm lọc TRỰC TIẾP TRÊN DATASET (không dùng hàm lọc DataLoader cũ nữa)
+            def get_filtered_dataset(dset, meta_key, meta_start_end_idxs):
+                meta_key_idx = dset.metadata_fields.index(meta_key)
+                # Lấy các giá trị (VD: bệnh viện 1, 2)
+                meta_start_end_val_range = dset.metadata_array[:, meta_key_idx].unique(sorted=True)[meta_start_end_idxs[0]:meta_start_end_idxs[1]]
+                
+                # Lọc index
+                filter_in_idxs = np.where(
+                    (dset.metadata_array[:, meta_key_idx] >= meta_start_end_val_range[0])
+                    & (dset.metadata_array[:, meta_key_idx] <= meta_start_end_val_range[-1])
+                )[0]
+                
+                # TRẢ VỀ DATASET MỚI
+                from wilds.datasets.wilds_dataset import WILDSSubset # Hoặc import đúng thư viện Subset bạn đang dùng
+                return WILDSSubset(dataset=dset, indices=filter_in_idxs, transform=None)
+
+            # 3. Lọc Dataset để lấy dset cho split 1 và split 2
+            train_dset1 = get_filtered_dataset(dset=train_dataset, meta_key="hospital", meta_start_end_idxs=[1, 2])
+            train_dset2 = get_filtered_dataset(dset=train_dataset, meta_key="hospital", meta_start_end_idxs=[0, 1])
+
+            # 4. Tự tạo DataLoader CHUẨN từ dset (Không gọi get_train_loader)
+            from torch.utils.data import DataLoader
+
+            train_dl1 = DataLoader(train_dset1, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+            train_dl2 = DataLoader(train_dset2, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+            
+            teacher_dl = dls["val"] # dls["test"]
+            test_dl = dls["test"] # 
+        elif cfg["data"]["name"] == "pacs":
+            teacher_dl = dlss["teacher_data"]
+            test_dl = dlss["test"]
+        elif cfg["data"]["name"] == "vlcs":
+            teacher_dl = dlss["teacher_data"]
+            test_dl = dlss["test"]
+        # 5. Đưa train_dl1 hoặc train_dl2 vào train_head_DG tùy mục đích của bạn
+        
+        if cfg["selfMix"]:
+            
+            ### Cần tự set lại val và test mỗi lần test
+            results, student_model_probe = train_head_DG_selfMix(
+                teacher_model=teacher_model,
+                student_model=student_model,
+                val_dataloader=teacher_dl, # val_dataloader=dls["val"],
+                test_dataloader=test_dl, # test_dataloader=dls[cfg["w2s"]["test_data_key"]],
+                cfg=cfg,
+                cached_labels_path=cached_labels_path,
+                cached_embs_path=cached_embs_path,
+                logger=logger,
+                results=results,
+                rng=np.random.default_rng(cfg["seed"]),
+                n_classes=n_classes,
+                return_data=False,
+                additional_eval_data=None if not cfg["w2s"]["eval_on_id_val_data"] else {
+                    "id_val_all": (student_model_probe_data["x"], student_model_probe_data["y"]),
+                    "id_val_all_weak": (student_model_probe_data["x"], torch.argmax(student_model_probe_data["yw"], dim=1)),
+                    "id_val_val": (student_model_probe_data["x_val"], student_model_probe_data["y_val"]),
+                    "id_val_val_weak": (student_model_probe_data["x_val"], student_model_probe_data["yw_val"]),
+                    "id_val_test": (student_model_probe_data["x_test"], student_model_probe_data["y_test"]),
+                    "id_val_test_weak": (student_model_probe_data["x_test"], student_model_probe_data["yw_test"]),
+                },
+                before_optim_run_callback_weak=before_optim_run_callback_weak,
+                before_batch_callback_weak=before_batch_callback_weak,
+                after_batch_callback_weak=after_batch_callback_weak,
+            )
+        else:
+            results, student_model_probe = train_head_DG(
+                teacher_model=teacher_model,
+                student_model=student_model,
+                val_dataloader=teacher_dl, # val_dataloader=dls["val"],
+                test_dataloader=test_dl, # test_dataloader=dls[cfg["w2s"]["test_data_key"]],
+                cfg=cfg,
+                cached_labels_path=cached_labels_path,
+                cached_embs_path=cached_embs_path,
+                logger=logger,
+                results=results,
+                rng=np.random.default_rng(cfg["seed"]),
+                n_classes=n_classes,
+                return_data=False,
+                additional_eval_data=None if not cfg["w2s"]["eval_on_id_val_data"] else {
+                    "id_val_all": (student_model_probe_data["x"], student_model_probe_data["y"]),
+                    "id_val_all_weak": (student_model_probe_data["x"], torch.argmax(student_model_probe_data["yw"], dim=1)),
+                    "id_val_val": (student_model_probe_data["x_val"], student_model_probe_data["y_val"]),
+                    "id_val_val_weak": (student_model_probe_data["x_val"], student_model_probe_data["yw_val"]),
+                    "id_val_test": (student_model_probe_data["x_test"], student_model_probe_data["y_test"]),
+                    "id_val_test_weak": (student_model_probe_data["x_test"], student_model_probe_data["yw_test"]),
+                },
+                before_optim_run_callback_weak=before_optim_run_callback_weak,
+                before_batch_callback_weak=before_batch_callback_weak,
+                after_batch_callback_weak=after_batch_callback_weak,
+            )
+    else:
+        results, student_model_probe = train_head(
+            teacher_model=teacher_model,
+            student_model=student_model,
+            dataloader=dls[cfg["w2s"]["test_data_key"]],
+            cfg=cfg,
+            cached_labels_path=cached_labels_path,
+            cached_embs_path=cached_embs_path,
+            logger=logger,
+            results=results,
+            rng=np.random.default_rng(cfg["seed"]),
+            n_classes=n_classes,
+            return_data=False,
+            additional_eval_data=None if not cfg["w2s"]["eval_on_id_val_data"] else {
+                "id_val_all": (student_model_probe_data["x"], student_model_probe_data["y"]),
+                "id_val_all_weak": (student_model_probe_data["x"], torch.argmax(student_model_probe_data["yw"], dim=1)),
+                "id_val_val": (student_model_probe_data["x_val"], student_model_probe_data["y_val"]),
+                "id_val_val_weak": (student_model_probe_data["x_val"], student_model_probe_data["yw_val"]),
+                "id_val_test": (student_model_probe_data["x_test"], student_model_probe_data["y_test"]),
+                "id_val_test_weak": (student_model_probe_data["x_test"], student_model_probe_data["yw_test"]),
+            },
+            before_optim_run_callback_weak=before_optim_run_callback_weak,
+            before_batch_callback_weak=before_batch_callback_weak,
+            after_batch_callback_weak=after_batch_callback_weak,
+        )
 
     ### save ensemble weights
     if cfg["ensemble"]["save_ensemble_weights"] == "all":
@@ -261,6 +497,32 @@ def main(cfg_path: str):
     logger.info("Loading the data...")
     dsets, dls = get_data(cfg=cfg["data"])
     n_classes = dsets[tuple(dsets.keys())[0]].n_classes if hasattr(dsets[tuple(dsets.keys())[0]], "n_classes") else len(dsets[tuple(dsets.keys())[0]].classes)
+
+    # ### ---------------- THÊM MỚI: LỌC DOMAIN CHO W2S ---------------- ###
+    # meta_key = cfg["data"].get("domain_group", "hospital") # Mặc định hospital cho Camelyon17
+    
+    # # 1. Lọc Finetuning Data (dùng cho Student model)
+    # if cfg["w2s"].get("finetune_domain_idxs") is not None:
+    #     logger.info(f"Filtering W2S Finetuning data to domains: {cfg['w2s']['finetune_domain_idxs']}")
+    #     id_val_key = cfg["w2s"]["id_val_data_key"]
+    #     dls[id_val_key], _ = filter_dl_by_metadata(
+    #         dataloader=dls[id_val_key],
+    #         meta_key=meta_key,
+    #         meta_start_end_idxs=cfg["w2s"]["finetune_domain_idxs"]
+    #     )
+
+    # # 2. Lọc Target Data (dùng để Test Student model)
+    # if cfg["w2s"].get("target_domain_idxs") is not None:
+    #     logger.info(f"Filtering W2S Target data to domains: {cfg['w2s']['target_domain_idxs']}")
+    #     test_key = cfg["w2s"]["test_data_key"]
+    #     dls[test_key], _ = filter_dl_by_metadata(
+    #         dataloader=dls[test_key],
+    #         meta_key=meta_key,
+    #         meta_start_end_idxs=cfg["w2s"]["target_domain_idxs"]
+    #     )
+    # ### -------------------------------------------------------------- ###
+
+
 
     ### load weak ensemble
     weak_ensemble = get_ensemble(cfg=cfg, logger=logger, wdb_run=wdb_run, dls=dls, n_classes=n_classes)

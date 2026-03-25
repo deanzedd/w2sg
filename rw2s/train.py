@@ -10,6 +10,8 @@ from datetime import datetime
 from rw2s.utils import seed_all, preload
 from rw2s.losses import LOSS_DICT
 
+from rw2s.selfMix import fit_gmm, sharpen, train_selfmix_probe
+
 
 def train_head(
     teacher_model,
@@ -136,6 +138,484 @@ def train_head(
     ### gt
     if before_optim_run_callback_gt is not None:
         before_optim_run_callback_gt(yw=yw_test, sample_idxs=n_train + np.arange(len(yw_test)))
+    seed_all(cfg["seed"])
+    results_gt, _ = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
+        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
+        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
+    results["results_gt"].append(results_gt)
+
+    if return_data:
+        return results, student_model_probe, {"x": x, "y": y, "yw": yw, "x_train": x_train, "y_train": y_train, "x_val": x_val, "y_val": y_val, "x_test": x_test, "y_test": y_test, "yw_train": yw_train, "yw_val": yw_val, "yw_test": yw_test}
+    return results, student_model_probe
+
+
+import os
+import torch
+import numpy as np
+import dill
+from datetime import datetime
+from functools import partial
+
+def train_head_DG(
+    teacher_model,
+    student_model,
+    val_dataloader,     # CHANGED: Thay dataloader bằng val_dataloader
+    test_dataloader,    # NEW: Thêm test_dataloader
+    cfg,
+    logger,
+    cached_labels_path,
+    cached_embs_path,
+    results,
+    rng,
+    n_classes,
+    return_data=False,
+    additional_eval_data=None,
+    before_optim_run_callback_weak=None,
+    before_optim_run_callback_gt=None,
+    after_batch_callback_weak=None,
+    before_batch_callback_weak=None,
+    after_batch_callback_gt=None,
+    before_batch_callback_gt=None,
+):
+    """
+    Thiết kế đầu vào nhận 2 domain val và test
+    chia val thành 0.8, 0.2: train, val cho w2s
+    test: target data lấy toàn bộ
+    """
+    
+    ### get (weak) labels from current teacher
+    if cfg["w2s"]["load_labels"] and os.path.exists(cached_labels_path):
+        # load from cache
+        logger.info("Loading teacher labels from cache...")
+        cached = torch.load(cached_labels_path, pickle_module=dill, map_location="cpu")
+        val_gt_labels, val_teacher_labels = cached["val_gt_labels"], cached["val_teacher_labels"]
+        test_gt_labels, test_teacher_labels = cached["test_gt_labels"], cached["test_teacher_labels"]
+        teacher_acc = cached.get("teacher_acc", 0) # Fallback if not saved
+    else:
+        # collect (and save) for BOTH val and test
+        chunking_dir = os.path.join(os.path.dirname(cached_labels_path), f"label_chunks_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        os.makedirs(chunking_dir, exist_ok=True)
+        logger.info("Collecting teacher labels for Validation Set...")
+        _, val_gt_labels, val_teacher_labels, val_teacher_acc, _, _ = preload(model=partial(teacher_model, combine_logits=False, collect_embeddings=False), loader=val_dataloader, device=cfg["device"], store_embs=False, store_inps=False, chunking_dir=os.path.join(chunking_dir, 'val'))
+        
+        logger.info("Collecting teacher labels for Test Set...")
+        _, test_gt_labels, test_teacher_labels, test_teacher_acc, _, _ = preload(model=partial(teacher_model, combine_logits=False, collect_embeddings=False), loader=test_dataloader, device=cfg["device"], store_embs=False, store_inps=False, chunking_dir=os.path.join(chunking_dir, 'test'))
+        
+        # Trích xuất giá trị số thực (float) an toàn trước khi tính trung bình
+        val_acc_float = np.mean(val_teacher_acc)
+        test_acc_float = np.mean(test_teacher_acc)
+        teacher_acc = float((val_acc_float + test_acc_float) / 2.0)
+
+        if cfg["w2s"]["save_labels"]:
+            torch.save({
+                "cfg": cfg,
+                "val_gt_labels": val_gt_labels,
+                "val_teacher_labels": val_teacher_labels,
+                "test_gt_labels": test_gt_labels,
+                "test_teacher_labels": test_teacher_labels,
+                "teacher_acc": teacher_acc,
+            }, cached_labels_path, pickle_module=dill)
+
+    ### get embeddings from the student model
+    if cfg["w2s"]["load_embeddings"] and os.path.exists(cached_embs_path):
+        # load from cache
+        logger.info("Loading student model embeddings from cache...")
+        cached = torch.load(cached_embs_path, pickle_module=dill)
+        val_student_embeddings, val_student_gt_labels = cached["val_embeddings"], cached["val_gt_labels"]
+        test_student_embeddings, test_student_gt_labels = cached["test_embeddings"], cached["test_gt_labels"]
+    else:
+        # collect (and save) for BOTH val and test
+        chunking_dir = os.path.join(os.path.dirname(cached_embs_path), f"embs_chunks_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        os.makedirs(chunking_dir, exist_ok=True)
+        
+        logger.info(f"Collecting student embeddings for Validation Set...")
+        val_student_embeddings, val_student_gt_labels, _, _, _, _ = preload(model=student_model, loader=val_dataloader, device=cfg["device"], chunking_dir=os.path.join(chunking_dir, 'val'), store_embs=True)
+        
+        logger.info(f"Collecting student embeddings for Test Set...")
+        test_student_embeddings, test_student_gt_labels, _, _, _, _ = preload(model=student_model, loader=test_dataloader, device=cfg["device"], chunking_dir=os.path.join(chunking_dir, 'test'), store_embs=True)
+
+        if cfg["w2s"]["save_embeddings"]:
+            torch.save({
+                "cfg": cfg,
+                "val_embeddings": val_student_embeddings,
+                "val_gt_labels": val_student_gt_labels,
+                "test_embeddings": test_student_embeddings,
+                "test_gt_labels": test_student_gt_labels,
+            }, cached_embs_path, pickle_module=dill)
+    # breakpoint()
+    assert torch.all(val_gt_labels == val_student_gt_labels), "Val GT labels from teacher and student do not match."
+    # breakpoint()
+    assert torch.all(test_gt_labels == test_student_gt_labels), "Test GT labels from teacher and student do not match."
+    del val_student_gt_labels, test_student_gt_labels
+
+    ### CHANGED: Trộn (shuffle) và cắt dữ liệu chỉ cho tập VAL
+    order = np.arange(len(val_gt_labels))
+    rng.shuffle(order)
+    results["order"].append(order)
+
+    x_val_all = val_student_embeddings[order]
+    y_val_all = val_gt_labels[order]
+    yw_val_all = val_teacher_labels[order]
+
+    ### split Validation into Train & Val for w2s
+    assert len(cfg["w2s"]["train_val_test_split_DG"]) == 2, "Train/val split config must be of length 2 (e.g., [0.8, 0.2])."
+    assert sum(cfg["w2s"]["train_val_test_split_DG"]) == 1.0, "Train/val split must sum to 1."
+    
+    n_train = int(cfg["w2s"]["train_val_test_split_DG"][0] * len(x_val_all))
+    
+    # Lấy Train & Val từ val_dataloader
+    x_train, x_val = x_val_all[:n_train], x_val_all[n_train:]
+    y_train, y_val = y_val_all[:n_train], y_val_all[n_train:]
+    yw_train, yw_val = yw_val_all[:n_train], yw_val_all[n_train:]
+
+    # Lấy Test toàn bộ từ test_dataloader
+    x_test = test_student_embeddings
+    y_test = test_gt_labels
+    yw_test = test_teacher_labels
+
+    # Nối lại để tính toán logging chung
+    x = torch.cat([x_train, x_val, x_test]) if isinstance(x_train, torch.Tensor) else np.concatenate([x_train, x_val, x_test])
+    y = torch.cat([y_train, y_val, y_test]) if isinstance(y_train, torch.Tensor) else np.concatenate([y_train, y_val, y_test])
+    yw = torch.cat([yw_train, yw_val, yw_test]) if isinstance(yw_train, torch.Tensor) else np.concatenate([yw_train, yw_val, yw_test])
+
+    yw_val = (yw_val.mean(1) if yw_val.ndim == 3 else yw_val).argmax(-1) # only for evaluation
+    yw_test = (yw_test.mean(1) if yw_test.ndim == 3 else yw_test).argmax(-1) # only for evaluation
+    
+    eval_datasets = {"val": (x_val, y_val), "val_weak": (x_val, yw_val), "test": (x_test, y_test), "test_weak": (x_test, yw_test)}
+    if additional_eval_data is not None:
+        for k, v in additional_eval_data.items():
+            eval_datasets[k] = v
+            
+    logger.info(f"\nTotal number of samples: {len(x)}.")
+    logger.info(f"  Number of training samples (from Val Dataloader): {len(x_train)}.")
+    logger.info(f"  Number of validation samples (from Val Dataloader): {len(x_val)}.")
+    logger.info(f"  Number of testing samples (from Test Dataloader): {len(x_test)}.")
+
+    ### eval teacher (average weak labels)
+    results["teacher_acc_src"].append(teacher_acc)
+    teacher_acc_all = (y == (yw if yw.ndim == 2 else yw.mean(1)).argmax(-1)).float().mean()
+    results["teacher_acc"].append(teacher_acc_all)
+    teacher_acc_train = (y_train == (yw_train if yw_train.ndim == 2 else yw_train.mean(1)).argmax(-1)).float().mean()
+    results["teacher_acc_train"].append(teacher_acc_train)
+    teacher_acc_val = (y_val == yw_val).float().mean()
+    results["teacher_acc_val"].append(teacher_acc_val)
+    teacher_acc_test = (y_test == yw_test).float().mean()
+    results["teacher_acc_test"].append(teacher_acc_test)
+    
+    if type(teacher_acc) == float:
+        teacher_acc = torch.tensor([teacher_acc], device=cfg["device"])
+    logger.info(f"Teacher label accuracy (all data, not combined): {[np.round(tacc.item() if hasattr(tacc, 'item') else tacc, 4) for tacc in teacher_acc]}")
+    logger.info(f"Teacher label accuracy (all data): {teacher_acc_all:.4f}")
+    logger.info(f"Teacher label accuracy (train): {teacher_acc_train:.4f}")
+    logger.info(f"Teacher label accuracy (val): {teacher_acc_val:.4f}")
+    logger.info(f"Teacher label accuracy (test): {teacher_acc_test:.4f}")
+
+    ### w2s
+    if before_optim_run_callback_weak is not None:
+        before_optim_run_callback_weak(yw=yw_train, sample_idxs=np.arange(len(yw_train)))
+    seed_all(cfg["seed"]) # important to get same results for cached/not cached
+    results_teacher_to_student, student_model_probe = train_logreg(x_train, yw_train, eval_datasets, device=cfg["device"],
+        batch_size=cfg["w2s"]["batch_size"], loss_fn=LOSS_DICT[cfg["w2s"]["teacher_labels_loss_fn_name"]](**(cfg["w2s"]["teacher_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
+        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_weak, after_batch_callback=after_batch_callback_weak)
+    results["results_teacher_to_student"].append(results_teacher_to_student)
+    results["student_model_probe"].append(student_model_probe)
+
+    ### gt
+    if before_optim_run_callback_gt is not None:
+        # CHANGED: Index của tập test bị dời đi một đoạn bằng tổng số mẫu của train và val
+        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
+    seed_all(cfg["seed"])
+    results_gt, _ = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
+        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
+        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
+    results["results_gt"].append(results_gt)
+
+    if return_data:
+        return results, student_model_probe, {"x": x, "y": y, "yw": yw, "x_train": x_train, "y_train": y_train, "x_val": x_val, "y_val": y_val, "x_test": x_test, "y_test": y_test, "yw_train": yw_train, "yw_val": yw_val, "yw_test": yw_test}
+    return results, student_model_probe
+
+
+
+def train_head_DG_selfMix(
+    teacher_model,
+    student_model,
+    val_dataloader,     # CHANGED: Thay dataloader bằng val_dataloader
+    test_dataloader,    # NEW: Thêm test_dataloader
+    cfg,
+    logger,
+    cached_labels_path,
+    cached_embs_path,
+    results,
+    rng,
+    n_classes,
+    return_data=False,
+    additional_eval_data=None,
+    before_optim_run_callback_weak=None,
+    before_optim_run_callback_gt=None,
+    after_batch_callback_weak=None,
+    before_batch_callback_weak=None,
+    after_batch_callback_gt=None,
+    before_batch_callback_gt=None,
+):
+    """
+    Thiết kế đầu vào nhận 2 domain val và test
+    chia val thành 0.8, 0.2: train, val cho w2s
+    test: target data lấy toàn bộ
+    """
+    
+    ### get (weak) labels from current teacher
+    if cfg["w2s"]["load_labels"] and os.path.exists(cached_labels_path):
+        # load from cache
+        logger.info("Loading teacher labels from cache...")
+        cached = torch.load(cached_labels_path, pickle_module=dill, map_location="cpu")
+        val_gt_labels, val_teacher_labels = cached["val_gt_labels"], cached["val_teacher_labels"]
+        test_gt_labels, test_teacher_labels = cached["test_gt_labels"], cached["test_teacher_labels"]
+        teacher_acc = cached.get("teacher_acc", 0) # Fallback if not saved
+    else:
+        # collect (and save) for BOTH val and test
+        chunking_dir = os.path.join(os.path.dirname(cached_labels_path), f"label_chunks_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        os.makedirs(chunking_dir, exist_ok=True)
+        logger.info("Collecting teacher labels for Validation Set...")
+        _, val_gt_labels, val_teacher_labels, val_teacher_acc, _, _ = preload(model=partial(teacher_model, combine_logits=False, collect_embeddings=False), loader=val_dataloader, device=cfg["device"], store_embs=False, store_inps=False, chunking_dir=os.path.join(chunking_dir, 'val'))
+        
+        logger.info("Collecting teacher labels for Test Set...")
+        _, test_gt_labels, test_teacher_labels, test_teacher_acc, _, _ = preload(model=partial(teacher_model, combine_logits=False, collect_embeddings=False), loader=test_dataloader, device=cfg["device"], store_embs=False, store_inps=False, chunking_dir=os.path.join(chunking_dir, 'test'))
+        
+        # Trích xuất giá trị số thực (float) an toàn trước khi tính trung bình
+        val_acc_float = np.mean(val_teacher_acc)
+        test_acc_float = np.mean(test_teacher_acc)
+        teacher_acc = float((val_acc_float + test_acc_float) / 2.0)
+
+        if cfg["w2s"]["save_labels"]:
+            torch.save({
+                "cfg": cfg,
+                "val_gt_labels": val_gt_labels,
+                "val_teacher_labels": val_teacher_labels,
+                "test_gt_labels": test_gt_labels,
+                "test_teacher_labels": test_teacher_labels,
+                "teacher_acc": teacher_acc,
+            }, cached_labels_path, pickle_module=dill)
+
+    ### get embeddings from the student model
+    if cfg["w2s"]["load_embeddings"] and os.path.exists(cached_embs_path):
+        # load from cache
+        logger.info("Loading student model embeddings from cache...")
+        cached = torch.load(cached_embs_path, pickle_module=dill)
+        val_student_embeddings, val_student_gt_labels = cached["val_embeddings"], cached["val_gt_labels"]
+        test_student_embeddings, test_student_gt_labels = cached["test_embeddings"], cached["test_gt_labels"]
+    else:
+        # collect (and save) for BOTH val and test
+        chunking_dir = os.path.join(os.path.dirname(cached_embs_path), f"embs_chunks_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        os.makedirs(chunking_dir, exist_ok=True)
+        
+        logger.info(f"Collecting student embeddings for Validation Set...")
+        val_student_embeddings, val_student_gt_labels, val_student_labels, _, _, _ = preload(model=student_model, loader=val_dataloader, device=cfg["device"], chunking_dir=os.path.join(chunking_dir, 'val'), store_embs=True)
+        #breakpoint()
+        logger.info(f"Collecting student embeddings for Test Set...")
+        test_student_embeddings, test_student_gt_labels, test_student_labels, _, _, _ = preload(model=student_model, loader=test_dataloader, device=cfg["device"], chunking_dir=os.path.join(chunking_dir, 'test'), store_embs=True)
+
+        if cfg["w2s"]["save_embeddings"]:
+            torch.save({
+                "cfg": cfg,
+                "val_embeddings": val_student_embeddings,
+                "val_gt_labels": val_student_gt_labels,
+                "test_embeddings": test_student_embeddings,
+                "test_gt_labels": test_student_gt_labels,
+            }, cached_embs_path, pickle_module=dill)
+    # breakpoint()
+    assert torch.all(val_gt_labels == val_student_gt_labels), "Val GT labels from teacher and student do not match."
+    # breakpoint()
+    assert torch.all(test_gt_labels == test_student_gt_labels), "Test GT labels from teacher and student do not match."
+    del val_student_gt_labels, test_student_gt_labels
+
+    ### CHANGED: Trộn (shuffle) và cắt dữ liệu chỉ cho tập VAL
+    order = np.arange(len(val_gt_labels))
+    rng.shuffle(order)
+    results["order"].append(order)
+
+    x_val_all = val_student_embeddings[order]
+    y_val_all = val_gt_labels[order]
+    yw_val_all = val_teacher_labels[order]
+
+    ### split Validation into Train & Val for w2s
+    assert len(cfg["w2s"]["train_val_test_split_DG"]) == 2, "Train/val split config must be of length 2 (e.g., [0.8, 0.2])."
+    assert sum(cfg["w2s"]["train_val_test_split_DG"]) == 1.0, "Train/val split must sum to 1."
+    
+    n_train = int(cfg["w2s"]["train_val_test_split_DG"][0] * len(x_val_all))
+    
+    # Lấy Train & Val từ val_dataloader
+    x_train, x_val = x_val_all[:n_train], x_val_all[n_train:]
+    y_train, y_val = y_val_all[:n_train], y_val_all[n_train:]
+    yw_train, yw_val = yw_val_all[:n_train], yw_val_all[n_train:]
+
+    # Lấy Test toàn bộ từ test_dataloader
+    x_test = test_student_embeddings
+    y_test = test_gt_labels
+    yw_test = test_teacher_labels
+
+    # Nối lại để tính toán logging chung
+    x = torch.cat([x_train, x_val, x_test]) if isinstance(x_train, torch.Tensor) else np.concatenate([x_train, x_val, x_test])
+    y = torch.cat([y_train, y_val, y_test]) if isinstance(y_train, torch.Tensor) else np.concatenate([y_train, y_val, y_test])
+    yw = torch.cat([yw_train, yw_val, yw_test]) if isinstance(yw_train, torch.Tensor) else np.concatenate([yw_train, yw_val, yw_test])
+
+    yw_val = (yw_val.mean(1) if yw_val.ndim == 3 else yw_val).argmax(-1) # only for evaluation
+    yw_test = (yw_test.mean(1) if yw_test.ndim == 3 else yw_test).argmax(-1) # only for evaluation
+    
+    eval_datasets = {"val": (x_val, y_val), "val_weak": (x_val, yw_val), "test": (x_test, y_test), "test_weak": (x_test, yw_test)}
+    # ...
+
+    if additional_eval_data is not None:
+        for k, v in additional_eval_data.items():
+            eval_datasets[k] = v
+            
+    logger.info(f"\nTotal number of samples: {len(x)}.")
+    logger.info(f"  Number of training samples (from Val Dataloader): {len(x_train)}.")
+    logger.info(f"  Number of validation samples (from Val Dataloader): {len(x_val)}.")
+    logger.info(f"  Number of testing samples (from Test Dataloader): {len(x_test)}.")
+
+    ### eval teacher (average weak labels)
+    results["teacher_acc_src"].append(teacher_acc)
+    teacher_acc_all = (y == (yw if yw.ndim == 2 else yw.mean(1)).argmax(-1)).float().mean()
+    results["teacher_acc"].append(teacher_acc_all)
+    teacher_acc_train = (y_train == (yw_train if yw_train.ndim == 2 else yw_train.mean(1)).argmax(-1)).float().mean()
+    results["teacher_acc_train"].append(teacher_acc_train)
+    teacher_acc_val = (y_val == yw_val).float().mean()
+    results["teacher_acc_val"].append(teacher_acc_val)
+    teacher_acc_test = (y_test == yw_test).float().mean()
+    results["teacher_acc_test"].append(teacher_acc_test)
+    
+    if type(teacher_acc) == float:
+        teacher_acc = torch.tensor([teacher_acc], device=cfg["device"])
+    logger.info(f"Teacher label accuracy (all data, not combined): {[np.round(tacc.item() if hasattr(tacc, 'item') else tacc, 4) for tacc in teacher_acc]}")
+    logger.info(f"Teacher label accuracy (all data): {teacher_acc_all:.4f}")
+    logger.info(f"Teacher label accuracy (train): {teacher_acc_train:.4f}")
+    logger.info(f"Teacher label accuracy (val): {teacher_acc_val:.4f}")
+    logger.info(f"Teacher label accuracy (test): {teacher_acc_test:.4f}")
+    '''
+    ### [NEW] eval student (Zero-shot / Pre-trained accuracy)
+    # Nếu bạn có sẵn hàm model (chưa fine-tune), bạn có thể đánh giá trực tiếp trên embeddings
+    # logger.info("--- Evaluating Base Student Performance ---")
+    
+    # student_model.eval()
+    # with torch.no_grad():
+    #     device = cfg["device"]
+        
+    #     # Tạo hàm đánh giá nhanh
+    #     def eval_student(features, labels):
+    #         features = torch.tensor(features, device=device) if not isinstance(features, torch.Tensor) else features.to(device)
+    #         labels = torch.tensor(labels, device=device) if not isinstance(labels, torch.Tensor) else labels.to(device)
+            
+    #         # Giả định student_model có thể nhận features trực tiếp
+    #         # NẾU student_model nhận ảnh thô (không phải features), phần này sẽ cần sửa lại để gọi qua DataLoader
+    #         try:
+    #             logits = student_model(features)
+    #             if logits.ndim > 2: logits = logits.mean(1)
+    #             preds = torch.argmax(logits, dim=-1)
+                
+    #             if labels.ndim > 1: labels = torch.argmax(labels, dim=-1)
+    #             acc = (preds == labels).float().mean().item()
+    #             return acc
+    #         except Exception as e:
+    #             return f"N/A (Error: {str(e)})"
+        
+    #     student_acc_train = eval_student(x_train, y_train)
+    #     student_acc_val = eval_student(x_val, y_val)
+    #     student_acc_test = eval_student(x_test, y_test)
+        
+    #     logger.info(f"Base Student label accuracy (train): {student_acc_train}")
+    #     logger.info(f"Base Student label accuracy (val): {student_acc_val}")
+    #     logger.info(f"Base Student label accuracy (test): {student_acc_test}")
+    
+    ### [NEW] eval student (Zero-shot / Pre-trained accuracy)
+    # logger.info("--- Evaluating Base Student Performance on Raw Data ---")
+    
+    # def eval_base_model(model, dataloader, device):
+    #     model.eval()
+    #     correct, total = 0, 0
+    #     with torch.no_grad():
+    #         for batch in dataloader:
+    #             # Dataloader thường trả về tuple (x, y, sample_idxs, ...)
+    #             x = batch[0].to(device)
+    #             y = batch[1].to(device)
+                
+    #             try:
+    #                 outputs = model(x)
+    #                 # Xử lý trường hợp model trả về Tuple (VD: HuggingFace model trả về loss, logits)
+    #                 logits = outputs[0] if isinstance(outputs, tuple) else outputs
+                        
+    #                 if logits.ndim > 2: 
+    #                     logits = logits.mean(1)
+    #                 preds = torch.argmax(logits, dim=-1)
+                    
+    #                 if y.ndim > 1: 
+    #                     y = torch.argmax(y, dim=-1)
+                        
+    #                 correct += (preds == y).float().sum().item()
+    #                 total += len(y)
+    #             except Exception as e:
+    #                 return f"N/A (Error: {str(e)})"
+                    
+    #     return round(correct / total, 4) if total > 0 else 0
+
+    # # Chạy đánh giá trực tiếp trên toàn bộ loader gốc
+    # student_acc_val_all = eval_base_model(student_model, val_dataloader, cfg["device"])
+    # student_acc_test_all = eval_base_model(student_model, test_dataloader, cfg["device"])
+    
+    # logger.info(f"Base Student label accuracy (Entire Validation Set): {student_acc_val_all}")
+    # logger.info(f"Base Student label accuracy (Entire Test Set): {student_acc_test_all}")
+    # logger.info("-------------------------------------------------------")
+    '''
+    ### w2s (Tiếp tục training...)
+
+    ### w2s
+    if before_optim_run_callback_weak is not None:
+        before_optim_run_callback_weak(yw=yw_train, sample_idxs=np.arange(len(yw_train)))
+    seed_all(cfg["seed"]) # important to get same results for cached/not cached
+    # results_teacher_to_student, student_model_probe = train_logreg(x_train,
+    #                                                                yw_train,
+    #                                                                eval_datasets,
+    #                                                                device=cfg["device"],
+    #     batch_size=cfg["w2s"]["batch_size"],
+    #     loss_fn=LOSS_DICT[cfg["w2s"]["teacher_labels_loss_fn_name"]](**(cfg["w2s"]["teacher_labels_loss_fn_kwargs"] or dict())),
+    #     n_epochs=cfg["w2s"]["n_epochs"],
+    #     lr=cfg["w2s"]["lr"],
+    #     n_classes=n_classes,
+    #     sample_weights=None,
+    #     before_batch_callback=before_batch_callback_weak,
+    #     after_batch_callback=after_batch_callback_weak)
+    # results["results_teacher_to_student"].append(results_teacher_to_student)
+    # results["student_model_probe"].append(student_model_probe)
+    
+    # --------------------------------------------------------------------------
+    # THAY ĐỔI TẠI ĐÂY: Sử dụng train_selfmix_probe thay vì train_logreg
+    # --------------------------------------------------------------------------
+    logger.info("Training Student Head with SelfMix (GMM + Manifold Mixup)...")
+    results_teacher_to_student, student_model_probe = train_selfmix_probe(
+        x_train=x_train, 
+        y_train=yw_train, 
+        eval_datasets=eval_datasets, 
+        device=cfg["device"],
+        loss_fn=None,
+        n_classes=n_classes,
+        batch_size=cfg["w2s"].get("batch_size", 256),
+        n_epochs=cfg["w2s"].get("n_epochs", 50),
+        lr=cfg["w2s"].get("lr", 1e-3),
+        alpha=4.0,       # Hệ số của phân phối Beta dùng cho Mixup
+        lambda_p=1.0,  # Trọng số cho Pseudo-Loss (Eq. 17)
+        lambda_r=5.0,  # Trọng số cho R-Drop Loss (Eq. 17)
+        T=0.5,           # Nhiệt độ để làm sắc nét (sharpening) pseudo-labels
+        warmup_epochs=20
+    )
+    
+    # Do hàm trả về dict thay vì tuple thuần của train_logreg, ta bọc lại format cho khớp results dictionary
+    results["results_teacher_to_student"].append(results_teacher_to_student)
+    results["student_model_probe"].append(student_model_probe)
+    # --------------------------------------------------------------------------
+
+    ### gt
+    if before_optim_run_callback_gt is not None:
+        # CHANGED: Index của tập test bị dời đi một đoạn bằng tổng số mẫu của train và val
+        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
     seed_all(cfg["seed"])
     results_gt, _ = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
         loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],

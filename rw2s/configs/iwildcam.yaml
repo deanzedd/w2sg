@@ -1,10 +1,10 @@
 seed: 0
 device: 0
 track_in_wandb: false
-save_path: "/mlbio_scratch/sobotka/w2s"
+save_path: "/home/adminn/theanh28/raven/w2s"
 
 data:
-  path: "/mlbio_scratch/sobotka/data"
+  path: "/home/adminn/theanh28/raven/data"
   name: "iwildcam"
   batch_size: 128 # weak model training
   n_threads: 4
@@ -26,7 +26,7 @@ ensemble:
     - model_name: "alexnet"
       pretrained: false
       # load_ckpt: null
-      load_ckpt: "/mlbio_scratch/sobotka/w2s/iwildcam/models/2024-09-22_11-08-17__weak__alexnet__iwildcam.pt"
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/iwildcam/models/2026-03-18_04-12-17__weak__alexnet__0.pt"
       freeze_backbone: false
       train: false
       train_cfg:
@@ -48,12 +48,14 @@ ensemble:
         scheduler_mul_factor: 0.96 # only for "multiplicative" scheduler_name
     - model_name: "alexnet"
       pretrained: false
-      load_ckpt: "/mlbio_scratch/sobotka/w2s/iwildcam/models/2024-09-29_22-10-49__weak__alexnet__iwildcam.pt"
+      # load_ckpt: null
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/iwildcam/models/2026-03-18_06-47-27__weak__alexnet__0.pt"
       freeze_backbone: false
       train: false
     - model_name: "alexnet"
       pretrained: false
-      load_ckpt: "/mlbio_scratch/sobotka/w2s/iwildcam/models/2024-09-29_22-15-05__weak__alexnet__iwildcam.pt"
+      # load_ckpt: null
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/iwildcam/models/2026-03-18_06-48-25__weak__alexnet__0.pt"
       freeze_backbone: false
       train: false
 
@@ -75,7 +77,7 @@ w2s:
   
   n_epochs: 100
   lr: 1e-4
-  batch_size: 128
+  batch_size: 8
 
   ### easy-sample guided initialization: set to the number of epochs where you want to train only on easy samples
   ignore_samples_with_disagreement_first_n_epochs: null

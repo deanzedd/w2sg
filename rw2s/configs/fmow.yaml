@@ -1,10 +1,10 @@
 seed: 0
 device: 0
 track_in_wandb: false
-save_path: "/mlbio_scratch/sobotka/w2s"
+save_path: "/home/adminn/theanh28/raven/w2s"
 
 data:
-  path: "/mlbio_scratch/sobotka/data"
+  path: "/home/adminn/theanh28/raven/data"
   name: "fmow"
   batch_size: 64 # weak model training
   n_threads: 4
@@ -26,7 +26,7 @@ ensemble:
     - model_name: "alexnet"
       pretrained: false
       # load_ckpt: null
-      load_ckpt: "/mlbio_scratch/sobotka/w2s/fmow/models/2024-09-22_10-57-52__weak__alexnet__fmow.pt"
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/fmow/models/2024-09-22_10-57-52__weak__alexnet__fmow.pt"
       freeze_backbone: false
       train: false
       train_cfg: # ignored if train=false
@@ -44,12 +44,12 @@ ensemble:
         scheduler_mul_factor: null # only for "multiplicative" scheduler_name
     - model_name: "alexnet"
       pretrained: false
-      load_ckpt: "/mlbio_scratch/sobotka/w2s/fmow/models/2024-09-29_23-01-03__weak__alexnet__fmow.pt"
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/fmow/models/2024-09-29_23-01-03__weak__alexnet__fmow.pt"
       freeze_backbone: false
       train: false
     - model_name: "alexnet"
       pretrained: false
-      load_ckpt: "/mlbio_scratch/sobotka/w2s/fmow/models/2024-09-29_22-22-29__weak__alexnet__fmow.pt"
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/fmow/models/2024-09-29_22-22-29__weak__alexnet__fmow.pt"
       freeze_backbone: false
       train: false
 

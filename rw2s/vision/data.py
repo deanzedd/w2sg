@@ -2,7 +2,10 @@ import os
 import numpy as np
 import torch
 import torchvision
+from torch.utils.data import ConcatDataset, random_split
+from torch.utils.data import DataLoader
 from torchvision import transforms
+from torchvision.datasets import ImageFolder
 from tqdm import tqdm
 from wilds import get_dataset
 from wilds.datasets.wilds_dataset import WILDSSubset
@@ -34,8 +37,18 @@ TFORMS = {
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ]),
     "imagenet_c": IMAGENET_C_TRANSFORM,
-}
+    "pacs": transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ]),
+    "vlcs": transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ])
 
+}
 
 def get_imagenet(datapath, split, batch_size, shuffle, transform, num_workers=1, class_range=None):
     print("Getting ImageNet data...", split)
@@ -77,6 +90,10 @@ def filter_dset_by_metadata(dset, meta_key, meta_start_end_idxs=None, meta_start
         ### filter by idx range
         meta_start_end_val_range = dset.metadata_array[:, meta_key_idx].unique(sorted=True)[meta_start_end_idxs[0]:meta_start_end_idxs[1]]
 
+    # b = len(meta_start_end_val_range)
+    # c = meta_start_end_val_range
+    # # a = meta_start_end_val_range[0]
+    # breakpoint()
     ### filter by value range
     filter_in_idxs = np.where(
         (dset.metadata_array[:, meta_key_idx] >= meta_start_end_val_range[0])
@@ -91,12 +108,45 @@ def filter_dl_by_metadata(dataloader, meta_key, meta_start_end_idxs=None, meta_s
     dl = get_train_loader("standard", dset_filtered, batch_size=dataloader.batch_size, num_workers=dataloader.num_workers, pin_memory=dataloader.pin_memory)
     return dl, new_meta_start_end_val_range
 
+# 2. Định nghĩa hàm lọc TRỰC TIẾP TRÊN DATASET (không dùng hàm lọc DataLoader cũ nữa)
+def get_filtered_dataset(dset, meta_key, meta_start_end_idxs, transform=None):
+    meta_key_idx = dset.metadata_fields.index(meta_key)
+    # Lấy các giá trị (VD: bệnh viện 1, 2)
+    meta_start_end_val_range = dset.metadata_array[:, meta_key_idx].unique(sorted=True)[meta_start_end_idxs[0]:meta_start_end_idxs[1]]
+    
+    # Lọc index
+    filter_in_idxs = np.where(
+        (dset.metadata_array[:, meta_key_idx] >= meta_start_end_val_range[0])
+        & (dset.metadata_array[:, meta_key_idx] <= meta_start_end_val_range[-1])
+    )[0]
+    
+    # TRẢ VỀ DATASET MỚI
+    from wilds.datasets.wilds_dataset import WILDSSubset # Hoặc import đúng thư viện Subset bạn đang dùng
+    return WILDSSubset(dataset=dset, indices=filter_in_idxs, transform=transform)
 
 def get_dataloader(dset, tier, cfg):
     if tier == "train":
         dl = get_train_loader("standard", dset, batch_size=cfg["batch_size"], num_workers=cfg["n_threads"], pin_memory=True)
     elif tier in ("id_val", "val", "test"):
         dl = get_eval_loader("standard", dset, batch_size=cfg["batch_size"], num_workers=cfg["n_threads"], pin_memory=True)
+    else:
+        raise ValueError(f"Data tier {tier} not recognized.")
+    return dl
+
+
+def get_dataloader_pacs(dset, tier, cfg):
+    if tier == "train":
+        return DataLoader(
+                dset,
+                shuffle=True, # Shuffle training dataset
+                sampler=None,
+                batch_size=cfg["batch_size"])
+    elif tier in ("teacher_data", "test"):
+        return DataLoader(
+                dset,
+                shuffle=False, 
+                sampler=None,
+                batch_size=cfg["batch_size"])
     else:
         raise ValueError(f"Data tier {tier} not recognized.")
     return dl
@@ -134,6 +184,75 @@ def get_data(cfg):
             shuffle=False,
             transform=tform,
         )
+    elif cfg["name"] == "pacs":
+        # 4 domains của PACS
+        domain_names = ["art_painting", "cartoon", "photo", "sketch"]
+        
+        # Lấy test_domain từ file config (có thể là int 0-3, mặc định là 3: sketch)
+        teacher_domain_idx = cfg.get("teacher_domain", 2)
+        teacher_domain_name = domain_names[teacher_domain_idx] if isinstance(teacher_domain_idx, int) else teacher_domain_idx
+        test_domain_idx = cfg.get("test_domain", 3) 
+        test_domain_name = domain_names[test_domain_idx] if isinstance(test_domain_idx, int) else test_domain_idx
+        
+        source_dsets = []
+        
+        
+        # Load data bằng ImageFolder
+        for domain in domain_names:
+            domain_path = os.path.join(cfg["path"], "pacs", "images", domain)
+            dataset = ImageFolder(root=domain_path, transform=tform)
+            
+            if domain == test_domain_name:
+                dsets["test"] = dataset
+            elif domain == teacher_domain_name:
+                dsets["teacher_data"] = dataset
+            else:
+                source_dsets.append(dataset)
+                
+        # Gộp 3 source domains lại
+        dsets["train"] = ConcatDataset(source_dsets)
+        
+        # 3. Chạy vòng lặp tạo DataLoader y hệt WILDS
+        for tier in ("train", "teacher_data", "test"):
+            # Dùng hàm get_dataloader của bạn (đã định nghĩa ở đâu đó trong code)
+            dls[tier] = get_dataloader_pacs(dset=dsets[tier], tier=tier, cfg=cfg)
+            
+        dls["train_split0"] = []
+        dls["train_split1"] = []
+    elif cfg["name"]=="vlcs":
+        domain_names = ["CALTECH", "LABELME", "SUN", "PASCAL"]
+        
+        # Lấy test_domain từ file config
+        teacher_domain_idx = cfg.get("teacher_domain", 2)
+        teacher_domain_name = domain_names[teacher_domain_idx] if isinstance(teacher_domain_idx, int) else teacher_domain_idx
+        test_domain_idx = cfg.get("test_domain", 3) 
+        test_domain_name = domain_names[test_domain_idx] if isinstance(test_domain_idx, int) else test_domain_idx
+        
+        source_dsets = []
+        
+        # Load data bằng ImageFolder
+        for domain in domain_names:
+            domain_path = os.path.join(cfg["path"], "VLCS", domain, "full")
+            dataset = ImageFolder(root=domain_path, transform=tform)
+            
+            if domain == test_domain_name:
+                dsets["test"] = dataset
+            elif domain == teacher_domain_name:
+                dsets["teacher_data"] = dataset
+            else:
+                source_dsets.append(dataset)
+                
+        # Gộp 3 source domains lại
+        dsets["train"] = ConcatDataset(source_dsets)
+        
+        # 3. Chạy vòng lặp tạo DataLoader y hệt WILDS
+        for tier in ("train", "teacher_data", "test"):
+            # Dùng hàm get_dataloader của bạn (đã định nghĩa ở đâu đó trong code)
+            dls[tier] = get_dataloader_pacs(dset=dsets[tier], tier=tier, cfg=cfg)
+            
+        dls["train_split0"] = []
+        dls["train_split1"] = []
+    
     else: # WILDS
         ### get data splits
         dset = get_dataset(dataset=cfg["name"], download=False, root_dir=os.path.join(cfg["path"], cfg["name"]))

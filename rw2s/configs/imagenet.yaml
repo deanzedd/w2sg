@@ -1,10 +1,10 @@
 seed: 0
 device: 0
 track_in_wandb: false
-save_path: "/mlbio_scratch/sobotka/w2s"
+save_path: "/home/adminn/theanh28/raven/w2s"
 
 data:
-  path: "/mlbio_scratch/sobotka/data"
+  path: "/home/adminn/theanh28/raven/data"
   name: "imagenet"
   batch_size: 128 # weak model training
   n_threads: 4
