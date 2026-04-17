@@ -7,7 +7,7 @@ selfMix: false
 
 data:
   path: "/home/adminn/theanh28/DATA"
-  name: "vlcs"
+  name: "pacs"
   batch_size: 128 # for training the weak model
   n_threads: 4
   subsplit_train: [0.8, 0.2] #null # portion of the train set to train/eval on (weak model training)
@@ -33,7 +33,7 @@ ensemble:
     - model_name: "alexnet"
       pretrained: false
       #load_ckpt: null
-      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/01_seed2_pt.pt"
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/pacs/models/01_seed2_pt.pt"
       freeze_backbone: false
       train: false
       train_cfg:
@@ -51,6 +51,7 @@ ensemble:
           momentum: 0.9
         scheduler_name: null # "cosine", "multiplicative"
         scheduler_mul_factor: null # only for "multiplicative" scheduler_name
+    
     
 
 w2s: # weak-to-strong (w2s) training procedure

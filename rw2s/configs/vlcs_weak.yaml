@@ -14,7 +14,7 @@ data:
   subsplit_test: [0.8, 0.2]
   data_key: "id_val"
   teacher_domain: 1
-  test_domain: 2
+  test_domain: 3
 
 ensemble:
   ### ensemble weights optimization

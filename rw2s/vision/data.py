@@ -46,6 +46,11 @@ TFORMS = {
         transforms.Resize((224, 224)),
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+    ]),
+    "office_home": transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+        transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
     ])
 
 }
@@ -135,18 +140,20 @@ def get_dataloader(dset, tier, cfg):
 
 
 def get_dataloader_pacs(dset, tier, cfg):
-    if tier == "train":
+    if tier in ("train"):
         return DataLoader(
                 dset,
                 shuffle=True, # Shuffle training dataset
                 sampler=None,
-                batch_size=cfg["batch_size"])
-    elif tier in ("teacher_data", "test"):
+                batch_size=cfg["batch_size"],
+                num_workers=cfg["n_threads"])
+    elif tier in ("teacher_data", "val_train", "teacher_valid", "test"):
         return DataLoader(
                 dset,
                 shuffle=False, 
                 sampler=None,
-                batch_size=cfg["batch_size"])
+                batch_size=cfg["batch_size"],
+                num_workers=cfg["n_threads"])
     else:
         raise ValueError(f"Data tier {tier} not recognized.")
     return dl
@@ -247,6 +254,43 @@ def get_data(cfg):
         
         # 3. Chạy vòng lặp tạo DataLoader y hệt WILDS
         for tier in ("train", "teacher_data", "test"):
+            # Dùng hàm get_dataloader của bạn (đã định nghĩa ở đâu đó trong code)
+            dls[tier] = get_dataloader_pacs(dset=dsets[tier], tier=tier, cfg=cfg)
+            
+        dls["train_split0"] = []
+        dls["train_split1"] = []
+    elif cfg["name"] == "office_home":
+        domain_names = ["art", "clipart", "product", "real_world"]
+        
+        # Lấy test_domain từ file config
+        teacher_domain_idx = cfg.get("teacher_domain", 2)
+        teacher_domain_name = domain_names[teacher_domain_idx] if isinstance(teacher_domain_idx, int) else teacher_domain_idx
+        test_domain_idx = cfg.get("test_domain", 3) 
+        test_domain_name = domain_names[test_domain_idx] if isinstance(test_domain_idx, int) else test_domain_idx
+        
+        source_dsets = []
+        source_valid_dsets = []
+        
+        # Load data bằng ImageFolder
+        for domain in domain_names:
+            domain_path = os.path.join(cfg["path"], "office_home_dg", domain, "train")
+            dataset = ImageFolder(root=domain_path, transform=tform)
+            
+            if domain == test_domain_name:
+                dsets["test"] = dataset
+            elif domain == teacher_domain_name:
+                dsets["teacher_data"] = dataset
+                dsets["teacher_valid"] = ImageFolder(root=os.path.join(cfg["path"], "office_home_dg", domain, "val"), transform=tform)
+            else:
+                source_dsets.append(dataset)
+                source_valid_dsets.append(ImageFolder(root=os.path.join(cfg["path"], "office_home_dg", domain, "val"), transform=tform))
+                
+        # Gộp 3 source domains lại
+        dsets["train"] = ConcatDataset(source_dsets)
+        dsets["val_train"] = ConcatDataset(source_valid_dsets)
+        
+        # 3. Chạy vòng lặp tạo DataLoader y hệt WILDS
+        for tier in ("train", "val_train", "teacher_data", "teacher_valid", "test"):
             # Dùng hàm get_dataloader của bạn (đã định nghĩa ở đâu đó trong code)
             dls[tier] = get_dataloader_pacs(dset=dsets[tier], tier=tier, cfg=cfg)
             

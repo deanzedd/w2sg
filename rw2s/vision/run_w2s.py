@@ -20,7 +20,7 @@ from functools import partial
 
 from rw2s.utils import preload, get_cache_paths, seed_all, slugify
 from rw2s.losses import LOSS_DICT
-from rw2s.train import train, train_head, train_head_DG, train_head_DG_selfMix
+from rw2s.train import train, train_head, train_head_DG, train_head_DG_selfMix, train_head_DG_hard, train_head_entropy_hard
 from rw2s.vision.data import get_data, filter_dl_by_metadata, get_dataloader, get_filtered_dataset
 from rw2s.vision.models import get_model, freeze_backbone, LinearProbeClassifier
 from rw2s.vision.ensemble import Ensemble, EnsembleParticipant, EnsembleDisagreementSchedule
@@ -187,6 +187,8 @@ def get_weak_model(cfg, model_cfg, logger, wdb_run, n_classes, model_idx=None):
             train_dl = DataLoader(train_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
             val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
         elif cfg["data"]["name"] == "pacs":
+            # train_dataset = dsets["test"]
+            # chỉnh để train 1 domain
             total_len = len(train_dataset)
             train_len = int(0.8 * total_len)
             val_len = total_len - train_len
@@ -195,12 +197,27 @@ def get_weak_model(cfg, model_cfg, logger, wdb_run, n_classes, model_idx=None):
             train_dl = DataLoader(train_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
             val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
         elif cfg["data"]["name"] == "vlcs":
+            # train_dataset = dsets["test"]
+            # chỉnh để train 1 domain
             total_len = len(train_dataset)
             train_len = int(0.8 * total_len)
             val_len = total_len - train_len
             generator = torch.Generator().manual_seed(cfg.get("seed", 0))
             train_subset, val_subset = random_split(train_dataset, lengths=[train_len, val_len], generator=generator)
             train_dl = DataLoader(train_subset, batch_size=cfg["data"]["batch_size"], shuffle=True, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+            val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
+        elif cfg["data"]["name"] == "office_home":
+            train_dl = dls["train"]
+            val_dl = dls["val_train"]
+            
+            train_dataset = dsets["test"]
+            # chỉnh để train 1 domain
+            total_len = len(train_dataset)
+            train_len = int(0.8 * total_len)
+            val_len = total_len - train_len
+            generator = torch.Generator().manual_seed(cfg.get("seed", 0))
+            train_subset, val_subset = random_split(train_dataset, lengths=[train_len, val_len], generator=generator)
+            train_dl = DataLoader(train_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
             val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
                 
                 
@@ -388,11 +405,66 @@ def run_w2s(cfg, logger, dls, n_classes, results, teacher_model, student_model, 
         elif cfg["data"]["name"] == "vlcs":
             teacher_dl = dlss["teacher_data"]
             test_dl = dlss["test"]
+        elif cfg["data"]["name"] == "office_home":
+            teacher_dl = dlss["teacher_data"]
+            test_dl = dlss["test"]
         # 5. Đưa train_dl1 hoặc train_dl2 vào train_head_DG tùy mục đích của bạn
         
-        if cfg["selfMix"]:
+        if cfg["selfMix"]=="hard":
             
             ### Cần tự set lại val và test mỗi lần test
+            results, student_model_probe = train_head_DG_hard(
+                teacher_model=teacher_model,
+                student_model=student_model,
+                val_dataloader=teacher_dl, # val_dataloader=dls["val"],
+                test_dataloader=test_dl, # test_dataloader=dls[cfg["w2s"]["test_data_key"]],
+                cfg=cfg,
+                cached_labels_path=cached_labels_path,
+                cached_embs_path=cached_embs_path,
+                logger=logger,
+                results=results,
+                rng=np.random.default_rng(cfg["seed"]),
+                n_classes=n_classes,
+                return_data=False,
+                additional_eval_data=None if not cfg["w2s"]["eval_on_id_val_data"] else {
+                    "id_val_all": (student_model_probe_data["x"], student_model_probe_data["y"]),
+                    "id_val_all_weak": (student_model_probe_data["x"], torch.argmax(student_model_probe_data["yw"], dim=1)),
+                    "id_val_val": (student_model_probe_data["x_val"], student_model_probe_data["y_val"]),
+                    "id_val_val_weak": (student_model_probe_data["x_val"], student_model_probe_data["yw_val"]),
+                    "id_val_test": (student_model_probe_data["x_test"], student_model_probe_data["y_test"]),
+                    "id_val_test_weak": (student_model_probe_data["x_test"], student_model_probe_data["yw_test"]),
+                },
+                before_optim_run_callback_weak=before_optim_run_callback_weak,
+                before_batch_callback_weak=before_batch_callback_weak,
+                after_batch_callback_weak=after_batch_callback_weak,
+            )
+        elif cfg["selfMix"]=="entropy_hard":
+            results, student_model_probe = train_head_entropy_hard(
+                teacher_model=teacher_model,
+                student_model=student_model,
+                val_dataloader=teacher_dl, # val_dataloader=dls["val"],
+                test_dataloader=test_dl, # test_dataloader=dls[cfg["w2s"]["test_data_key"]],
+                cfg=cfg,
+                cached_labels_path=cached_labels_path,
+                cached_embs_path=cached_embs_path,
+                logger=logger,
+                results=results,
+                rng=np.random.default_rng(cfg["seed"]),
+                n_classes=n_classes,
+                return_data=False,
+                additional_eval_data=None if not cfg["w2s"]["eval_on_id_val_data"] else {
+                    "id_val_all": (student_model_probe_data["x"], student_model_probe_data["y"]),
+                    "id_val_all_weak": (student_model_probe_data["x"], torch.argmax(student_model_probe_data["yw"], dim=1)),
+                    "id_val_val": (student_model_probe_data["x_val"], student_model_probe_data["y_val"]),
+                    "id_val_val_weak": (student_model_probe_data["x_val"], student_model_probe_data["yw_val"]),
+                    "id_val_test": (student_model_probe_data["x_test"], student_model_probe_data["y_test"]),
+                    "id_val_test_weak": (student_model_probe_data["x_test"], student_model_probe_data["yw_test"]),
+                },
+                before_optim_run_callback_weak=before_optim_run_callback_weak,
+                before_batch_callback_weak=before_batch_callback_weak,
+                after_batch_callback_weak=after_batch_callback_weak,
+            )
+        elif cfg["selfMix"]=="selfMix":
             results, student_model_probe = train_head_DG_selfMix(
                 teacher_model=teacher_model,
                 student_model=student_model,

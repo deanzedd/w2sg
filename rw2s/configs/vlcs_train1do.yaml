@@ -14,13 +14,13 @@ data:
   subsplit_val: [0.8, 0.2]
   subsplit_test: [0.8, 0.2]
   data_key: "id_val"
-  teacher_domain: 2
-  test_domain: 3
+  teacher_domain: 1
+  test_domain: 2
 
 ensemble:
   ### ensemble weights optimization
   ensemble_weights_opter_cfg:
-    lr: 0 # 1e-3 # lr=0 => adaptive weights turned off
+    lr: 1e-3 # 1e-3 # lr=0 => adaptive weights turned off
   ensemble_weights_init: "uniform" # "uniform", "random", "entropy"
   ensemble_weights_per_sample: false # if true, each sample has its own set of ensemble weights
   reset_ensemble_weights_at_epoch_end_to_uniform: false
@@ -33,7 +33,7 @@ ensemble:
     - model_name: "alexnet"
       pretrained: false
       #load_ckpt: null
-      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/01_seed2_pt.pt"
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/30_seed0_pt.pt"
       freeze_backbone: false
       train: false
       train_cfg:
@@ -51,6 +51,46 @@ ensemble:
           momentum: 0.9
         scheduler_name: null # "cosine", "multiplicative"
         scheduler_mul_factor: null # only for "multiplicative" scheduler_name
+    - model_name: "alexnet"
+      pretrained: false
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/30_seed1_pt.pt"
+      train: false
+      freeze_backbone: false
+    - model_name: "alexnet"
+      pretrained: false
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/30_seed2_pt.pt"
+      train: false
+      freeze_backbone: false
+    - model_name: "alexnet"
+      pretrained: false
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/train3_seed0.pt"
+      train: false
+      freeze_backbone: false
+    - model_name: "alexnet"
+      pretrained: false
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/train3_seed1.pt"
+      train: false
+      freeze_backbone: false
+    - model_name: "alexnet"
+      pretrained: false
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/train3_seed2.pt"
+      train: false
+      freeze_backbone: false
+    - model_name: "alexnet"
+      pretrained: false
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/train0_seed0.pt"
+      train: false
+      freeze_backbone: false
+    - model_name: "alexnet"
+      pretrained: false
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/train0_seed1.pt"
+      train: false
+      freeze_backbone: false
+    - model_name: "alexnet"
+      pretrained: false
+      load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/train0_seed2.pt"
+      train: false
+      freeze_backbone: false
     
 
 w2s: # weak-to-strong (w2s) training procedure
@@ -70,13 +110,13 @@ w2s: # weak-to-strong (w2s) training procedure
   gt_labels_loss_fn_name: "xent" # "xent", "logconf" (Conf method), "adapt_logconf" (V-sup method), "edl" (Bayes)
   gt_labels_loss_fn_kwargs: null
 
-  n_epochs: 30
+  n_epochs: 100
   lr: 1e-3
   batch_size: 16
 
   ### easy-sample guided initialization: set to the number of epochs where you want to train only on easy samples
   ### lấy theo {10%, 20%, 50%} số epoch đầu tiên, sau đó mới train trên tất cả dữ liệu
-  ignore_samples_with_disagreement_first_n_epochs: null #6 null
+  ignore_samples_with_disagreement_first_n_epochs: 30 #6 null
 
   ### what w2s setups to train/eval
   eval_on_id_val_data: false # for ID experiments

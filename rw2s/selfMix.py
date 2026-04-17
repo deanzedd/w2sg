@@ -112,7 +112,7 @@ def train_selfmix_probe(
                 labeled_mask = np.ones(len(x_train), dtype=bool)
                 clean_ratio = 1.0
             else:
-                labeled_mask, _ = fit_gmm(all_losses, clean_threshold=0.8)
+                labeled_mask, _ = fit_gmm(all_losses, clean_threshold=0.5)
                 clean_ratio = labeled_mask.sum() / len(x_train)
                 
             results["clean_ratio"].append(clean_ratio)
