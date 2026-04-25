@@ -3,7 +3,7 @@ device: 0
 track_in_wandb: false
 save_path: "/home/adminn/theanh28/raven/w2s"
 setting_DG: true # if true, train/val/test splits are done within the DG train set(finetuning and target data is different domain); if false, they are done within the OOD test set (finetune and domain target data: 1 domain)
-selfMix: "hard" # "selfMix", "entropy_hard", "hard"
+selfMix: "hard" # "selfMix", "entropy_hard", "hard", "disme"
 
 
 data:
@@ -21,7 +21,7 @@ data:
 ensemble:
   ### ensemble weights optimization
   ensemble_weights_opter_cfg:
-    lr: 1e-3 # 1e-3 # lr=0 => adaptive weights turned off
+    lr: 0 # 1e-3 # lr=0 => adaptive weights turned off
   ensemble_weights_init: "uniform" # "uniform", "random", "entropy"
   ensemble_weights_per_sample: false # if true, each sample has its own set of ensemble weights
   reset_ensemble_weights_at_epoch_end_to_uniform: false
@@ -90,7 +90,7 @@ w2s: # weak-to-strong (w2s) training procedure
 
   ### easy-sample guided initialization: set to the number of epochs where you want to train only on easy samples
   ### lấy theo {10%, 20%, 50%} số epoch đầu tiên, sau đó mới train trên tất cả dữ liệu
-  ignore_samples_with_disagreement_first_n_epochs: 6 #6 null
+  ignore_samples_with_disagreement_first_n_epochs: null #6 null
 
   ### what w2s setups to train/eval
   eval_on_id_val_data: false # for ID experiments

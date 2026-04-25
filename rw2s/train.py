@@ -11,6 +11,7 @@ from rw2s.utils import seed_all, preload
 from rw2s.losses import LOSS_DICT
 
 from rw2s.selfMix import fit_gmm, sharpen, train_selfmix_probe
+from rw2s.plot import plot_w2sg_analysis, compute_class_balance_stats, format_balance_stats
 
 
 def train_head(
@@ -325,7 +326,17 @@ def train_head_DG(
     results["results_teacher_to_student"].append(results_teacher_to_student)
     results["student_model_probe"].append(student_model_probe)
 
-    ### W2SG visualization (toggleable)
+    ### gt
+    if before_optim_run_callback_gt is not None:
+        # CHANGED: Index của tập test bị dời đi một đoạn bằng tổng số mẫu của train và val
+        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
+    seed_all(cfg["seed"])
+    results_gt, gt_model_probe = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
+        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
+        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
+    results["results_gt"].append(results_gt)
+
+    ### W2SG visualization (toggleable) — after both w2sg and gt training
     if cfg["w2s"].get("plot_w2sg", False):
         _plot_dir = cfg["w2s"].get("plot_save_dir", None)
         if _plot_dir:
@@ -336,6 +347,7 @@ def train_head_DG(
                 try:
                     plot_w2sg_analysis(
                         model=student_model_probe,
+                        gt_model=gt_model_probe,
                         eval_datasets=eval_datasets,
                         save_dir=_plot_dir,
                         seed=cfg["seed"],
@@ -345,16 +357,6 @@ def train_head_DG(
                     )
                 except Exception as _plot_err:
                     logger.info(f"[W2SG Plot] Warning: plotting failed ({_dm}): {_plot_err}")
-
-    ### gt
-    if before_optim_run_callback_gt is not None:
-        # CHANGED: Index của tập test bị dời đi một đoạn bằng tổng số mẫu của train và val
-        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
-    seed_all(cfg["seed"])
-    results_gt, _ = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
-        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
-        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
-    results["results_gt"].append(results_gt)
 
     if return_data:
         return results, student_model_probe, {"x": x, "y": y, "yw": yw, "x_train": x_train, "y_train": y_train, "x_val": x_val, "y_val": y_val, "x_test": x_test, "y_test": y_test, "yw_train": yw_train, "yw_val": yw_val, "yw_test": yw_test}
@@ -552,7 +554,22 @@ def train_head_DG_hard(
     results["results_teacher_to_student"].append(results_teacher_to_student)
     results["student_model_probe"].append(student_model_probe)
 
-    ### W2SG visualization (toggleable)
+    ### gt
+    if before_optim_run_callback_gt is not None:
+        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
+    seed_all(cfg["seed"])
+    results_gt, gt_model_probe = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
+        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
+        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
+    results["results_gt"].append(results_gt)
+
+    ### W2SG visualization (toggleable) — after both w2sg and gt training
+    _balance_stats = None
+    if '_balance_before' in results_teacher_to_student and '_balance_after' in results_teacher_to_student:
+        _balance_stats = {
+            'before': results_teacher_to_student['_balance_before'],
+            'after': results_teacher_to_student['_balance_after'],
+        }
     if cfg["w2s"].get("plot_w2sg", False):
         _plot_dir = cfg["w2s"].get("plot_save_dir", None)
         if _plot_dir:
@@ -563,24 +580,17 @@ def train_head_DG_hard(
                 try:
                     plot_w2sg_analysis(
                         model=student_model_probe,
+                        gt_model=gt_model_probe,
                         eval_datasets=eval_datasets,
                         save_dir=_plot_dir,
                         seed=cfg["seed"],
                         device=cfg["device"],
                         dim_reduction=_dm,
+                        balance_stats=_balance_stats,
                         logger=logger,
                     )
                 except Exception as _plot_err:
                     logger.info(f"[W2SG Plot] Warning: plotting failed ({_dm}): {_plot_err}")
-
-    ### gt
-    if before_optim_run_callback_gt is not None:
-        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
-    seed_all(cfg["seed"])
-    results_gt, _ = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
-        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
-        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
-    results["results_gt"].append(results_gt)
 
     if return_data:
         return results, student_model_probe, {"x": x, "y": y, "yw": yw, "x_train": x_train, "y_train": y_train, "x_val": x_val, "y_val": y_val, "x_test": x_test, "y_test": y_test, "yw_train": yw_train, "yw_val": yw_val, "yw_test": yw_test}
@@ -781,7 +791,22 @@ def train_head_entropy_hard(
     results["results_teacher_to_student"].append(results_teacher_to_student)
     results["student_model_probe"].append(student_model_probe)
 
-    ### W2SG visualization (toggleable)
+    ### gt
+    if before_optim_run_callback_gt is not None:
+        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
+    seed_all(cfg["seed"])
+    results_gt, gt_model_probe = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
+        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
+        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
+    results["results_gt"].append(results_gt)
+
+    ### W2SG visualization (toggleable) — after both w2sg and gt training
+    _balance_stats = None
+    if '_balance_before' in results_teacher_to_student and '_balance_after' in results_teacher_to_student:
+        _balance_stats = {
+            'before': results_teacher_to_student['_balance_before'],
+            'after': results_teacher_to_student['_balance_after'],
+        }
     if cfg["w2s"].get("plot_w2sg", False):
         _plot_dir = cfg["w2s"].get("plot_save_dir", None)
         if _plot_dir:
@@ -792,24 +817,17 @@ def train_head_entropy_hard(
                 try:
                     plot_w2sg_analysis(
                         model=student_model_probe,
+                        gt_model=gt_model_probe,
                         eval_datasets=eval_datasets,
                         save_dir=_plot_dir,
                         seed=cfg["seed"],
                         device=cfg["device"],
                         dim_reduction=_dm,
+                        balance_stats=_balance_stats,
                         logger=logger,
                     )
                 except Exception as _plot_err:
                     logger.info(f"[W2SG Plot] Warning: plotting failed ({_dm}): {_plot_err}")
-
-    ### gt
-    if before_optim_run_callback_gt is not None:
-        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
-    seed_all(cfg["seed"])
-    results_gt, _ = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
-        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
-        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
-    results["results_gt"].append(results_gt)
 
     if return_data:
         return results, student_model_probe, {"x": x, "y": y, "yw": yw, "x_train": x_train, "y_train": y_train, "x_val": x_val, "y_val": y_val, "x_test": x_test, "y_test": y_test, "yw_train": yw_train, "yw_val": yw_val, "yw_test": yw_test}
@@ -1363,6 +1381,8 @@ def train_logreg(
     return results, model
 
 
+
+
 # =============================================================================
 # Clustering helper for confidence-based data splitting
 # =============================================================================
@@ -1444,6 +1464,115 @@ def cluster_by_confidence(confidence_values, method='gmm', threshold=0.5):
 
 
 # =============================================================================
+# cluster_by_confidence_v2: Confidence filtering with per-class minimum guarantee
+# =============================================================================
+def cluster_by_confidence_v2(confidence_values, labels, n_classes, method='gmm', threshold=0.5, min_samples_per_class=5):
+    """
+    Cluster 1D confidence values into 2 groups (high vs low confidence),
+    then ensure every class has at least `min_samples_per_class` samples.
+
+    If after filtering a class has fewer than `min_samples_per_class` samples,
+    additional samples of that class are pulled back from the rejected pool,
+    selecting those with the highest confidence first.
+
+    Args:
+        confidence_values: numpy array or torch tensor of shape (N,)
+        labels: torch tensor of shape (N,), (N, C), or (N, K, C) — training labels
+                (soft or hard). Used to determine class membership.
+        n_classes: int, total number of classes
+        method: 'gmm', 'kmeans', 'threshold', 'median'
+        threshold: GMM/KMeans probability threshold or direct threshold value
+        min_samples_per_class: int, minimum samples per class after filtering (default 5)
+
+    Returns:
+        keep_mask: boolean numpy array (N,), True = keep this sample
+        cluster_info: dict with clustering details (includes backfill info)
+    """
+    # --- Step 1: Run the original clustering ---
+    high_conf_mask, cluster_info = cluster_by_confidence(
+        confidence_values, method=method, threshold=threshold
+    )
+
+    # --- Step 2: Extract hard labels from (possibly soft) labels ---
+    if isinstance(labels, torch.Tensor):
+        if labels.ndim == 3:
+            hard_labels = labels.float().mean(1).argmax(-1).cpu().numpy()
+        elif labels.ndim == 2:
+            hard_labels = labels.argmax(-1).cpu().numpy()
+        else:
+            hard_labels = labels.cpu().numpy()
+    else:
+        hard_labels = np.array(labels)
+    hard_labels = hard_labels.astype(np.int64)
+
+    # Ensure confidence_values is numpy
+    if isinstance(confidence_values, torch.Tensor):
+        conf_np = confidence_values.cpu().numpy().flatten().astype(np.float64)
+    else:
+        conf_np = np.array(confidence_values).flatten().astype(np.float64)
+
+    # --- Step 3: Check per-class counts and backfill if needed ---
+    keep_mask = high_conf_mask.copy()
+    backfill_info = {}
+    total_backfilled = 0
+
+    for cls_id in range(n_classes):
+        # Indices of all samples belonging to this class
+        cls_all_indices = np.where(hard_labels == cls_id)[0]
+        if len(cls_all_indices) == 0:
+            # This class has zero samples in the entire dataset, nothing to backfill
+            continue
+
+        # Count how many are currently kept
+        cls_kept_count = keep_mask[cls_all_indices].sum()
+
+        if cls_kept_count < min_samples_per_class:
+            # Find rejected samples of this class
+            cls_rejected_indices = cls_all_indices[~keep_mask[cls_all_indices]]
+
+            if len(cls_rejected_indices) == 0:
+                # All samples of this class are already kept (but < min), nothing more to add
+                continue
+
+            # Number of additional samples needed
+            n_needed = min_samples_per_class - int(cls_kept_count)
+
+            # Sort rejected samples by confidence descending (pick highest confidence first)
+            rejected_confs = conf_np[cls_rejected_indices]
+            sorted_order = np.argsort(-rejected_confs)  # descending
+            n_to_add = min(n_needed, len(cls_rejected_indices))
+
+            # Add these samples back to the keep mask
+            indices_to_add = cls_rejected_indices[sorted_order[:n_to_add]]
+            keep_mask[indices_to_add] = True
+
+            backfill_info[int(cls_id)] = {
+                'had': int(cls_kept_count),
+                'added': n_to_add,
+                'now': int(cls_kept_count) + n_to_add,
+                'total_in_dataset': len(cls_all_indices),
+            }
+            total_backfilled += n_to_add
+
+    # Update cluster_info with backfill details
+    cluster_info['backfill'] = {
+        'min_samples_per_class': min_samples_per_class,
+        'total_backfilled': total_backfilled,
+        'n_classes_backfilled': len(backfill_info),
+        'per_class': backfill_info,
+    }
+
+    if total_backfilled > 0:
+        print(f"  [cluster_by_confidence_v2] Backfilled {total_backfilled} samples across "
+              f"{len(backfill_info)} classes (min_per_class={min_samples_per_class})")
+        for cls_id, info in backfill_info.items():
+            print(f"    Class {cls_id}: {info['had']} -> {info['now']} "
+                  f"(+{info['added']}, total in dataset: {info['total_in_dataset']})")
+
+    return keep_mask, cluster_info
+
+
+# =============================================================================
 # train_logreg_hard: Curriculum learning with confidence-based easy/hard split
 # =============================================================================
 def train_logreg_hard(
@@ -1497,9 +1626,11 @@ def train_logreg_hard(
 
     weak_confidence = weak_probs.max(dim=-1).values.cpu().numpy()
 
-    # Cluster and filter
-    keep_mask, weak_cluster_info = cluster_by_confidence(
-        weak_confidence, method=cluster_method, threshold=weak_conf_threshold
+    # Cluster and filter (v2: ensures min samples per class)
+    keep_mask, weak_cluster_info = cluster_by_confidence_v2(
+        weak_confidence, labels=y_train, n_classes=n_classes,
+        method=cluster_method, threshold=weak_conf_threshold,
+        min_samples_per_class=5
     )
 
     n_before = len(x_train)
@@ -1507,11 +1638,21 @@ def train_logreg_hard(
     y_train_filtered = y_train[keep_mask]
     n_after = len(x_train_filtered)
 
+    # --- Class balance stats BEFORE filtering ---
+    balance_before = compute_class_balance_stats(y_train, n_classes)
+    print(f"  === Class Balance BEFORE filtering ===")
+    print(format_balance_stats(balance_before, prefix="    "))
+
     print(f"  Samples before filtering: {n_before}")
     print(f"  Samples after filtering:  {n_after} ({n_after/n_before*100:.1f}%)")
     print(f"  Removed: {n_before - n_after} samples ({(n_before - n_after)/n_before*100:.1f}%)")
     print(f"  Weak confidence stats: min={weak_confidence.min():.4f}, max={weak_confidence.max():.4f}, mean={weak_confidence.mean():.4f}")
     print(f"  Cluster info: {weak_cluster_info}")
+
+    # --- Class balance stats AFTER filtering ---
+    balance_after = compute_class_balance_stats(y_train_filtered, n_classes)
+    print(f"  === Class Balance AFTER filtering ===")
+    print(format_balance_stats(balance_after, prefix="    "))
 
     # =================================================================
     # Setup training on filtered data
@@ -1811,6 +1952,10 @@ def train_logreg_hard(
     for key in eval_datasets.keys():
         results[key] = results[f"{key}_all"][-1]
 
+    # Store balance stats for visualization
+    results['_balance_before'] = balance_before
+    results['_balance_after'] = balance_after
+
     return results, model
 
 
@@ -1883,9 +2028,11 @@ def train_logreg_entropy_hard(
 
     weak_confidence = weak_probs.max(dim=-1).values.cpu().numpy()
 
-    # Cluster and filter
-    keep_mask, weak_cluster_info = cluster_by_confidence(
-        weak_confidence, method=cluster_method, threshold=weak_conf_threshold
+    # Cluster and filter (v2: ensures min samples per class)
+    keep_mask, weak_cluster_info = cluster_by_confidence_v2(
+        weak_confidence, labels=y_train, n_classes=n_classes,
+        method=cluster_method, threshold=weak_conf_threshold,
+        min_samples_per_class=5
     )
 
     n_before = len(x_train)
@@ -1895,11 +2042,21 @@ def train_logreg_entropy_hard(
     filtered_original_indices = np.where(keep_mask)[0]
     n_after = len(x_train_filtered)
 
+    # --- Class balance stats BEFORE filtering ---
+    balance_before = compute_class_balance_stats(y_train, n_classes)
+    print(f"  === Class Balance BEFORE filtering ===")
+    print(format_balance_stats(balance_before, prefix="    "))
+
     print(f"  Samples before filtering: {n_before}")
     print(f"  Samples after filtering:  {n_after} ({n_after/n_before*100:.1f}%)")
     print(f"  Removed: {n_before - n_after} samples ({(n_before - n_after)/n_before*100:.1f}%)")
     print(f"  Weak confidence stats: min={weak_confidence.min():.4f}, max={weak_confidence.max():.4f}, mean={weak_confidence.mean():.4f}")
     print(f"  Cluster info: {weak_cluster_info}")
+
+    # --- Class balance stats AFTER filtering ---
+    balance_after = compute_class_balance_stats(y_train_filtered, n_classes)
+    print(f"  === Class Balance AFTER filtering ===")
+    print(format_balance_stats(balance_after, prefix="    "))
 
     # =================================================================
     # Setup: start with filtered data, model, optimizer
@@ -2259,308 +2416,493 @@ def train_logreg_entropy_hard(
     for key in eval_datasets.keys():
         results[key] = results[f"{key}_all"][-1]
 
+    # Store balance stats for visualization
+    results['_balance_before'] = balance_before
+    results['_balance_after'] = balance_after
+
     return results, model
 
 
+from rw2s._disme_funcs import CPPProjector, supervised_contrastive_loss, topology_regularization_loss, NearestCentroidClassifier
+
 # =============================================================================
-# W2SG Analysis Visualization (toggleable via cfg["w2s"]["plot_w2sg"])
+# train_logreg_hard_disme: CPP-STPR with hard sample curriculum
 # =============================================================================
-def plot_w2sg_analysis(
-    model,
-    eval_datasets,
-    save_dir,
-    seed,
-    device,
-    dim_reduction='pca',
-    logger=None,
+def train_logreg_hard_disme(
+    x_train, y_train, eval_datasets, device, loss_fn,
+    n_epochs=20, weight_decay=0.0, lr=1e-3, batch_size=128, n_classes=1000,
+    sample_weights=None, before_batch_callback=None, after_batch_callback=None,
+    warmup_hard_epochs=3, hard_weight=2.0, cluster_method='gmm',
+    weak_conf_threshold=0.5, w2sg_conf_threshold=0.5,
+    projector_hidden_dim=512, projector_output_dim=256,
+    supcon_temperature=0.07, stpr_temperature=1.0,
+    lambda_supcon=1.0, lambda_stpr=0.5,
 ):
     """
-    Generate academic-grade visualization plots for Weak-to-Strong Generalization
-    (W2SG) analysis on the test set. Produces a figure with 5 subplots:
-
-      1. Weak Model Decision Space  (contour + scatter by GT label)
-      2. Strong Model Decision Space (contour + scatter by GT label)
-      3. Strong Model + 4 Emphasized Data Groups
-      4. Entropy KDE  (Weak vs Strong density overlay)
-      5. Weak Entropy vs Strong Entropy Scatter (colored by 4 groups)
-
-    A 6th panel shows a textual summary of group statistics.
-
-    Args:
-        model:          Trained w2sg linear probe (nn.Linear or similar).
-        eval_datasets:  dict containing at least 'test', 'test_weak',
-                        and optionally 'test_weak_raw'.
-        save_dir:       Directory to save the output PNG.
-        seed:           Seed number (used in the filename).
-        device:         torch device.
-        dim_reduction:  '`pca`' or '`tsne`' for 2-D projection.
-        logger:         Optional logger instance.
+    CPP-STPR with hard sample curriculum learning.
+    Phase 0: Filter data by weak confidence (cluster_by_confidence_v2).
+    Warmup: Train projector with equal weights.
+    After warmup: Split easy/hard by NCC confidence, upweight hard samples.
+    Uses Projector + SupCon + STPR + Nearest Centroid Classifier.
     """
-    # ---- lazy imports (avoid breaking existing code if libs missing) ----
-    import matplotlib
-    matplotlib.use('Agg')
-    import matplotlib.pyplot as plt
-    import matplotlib.gridspec as gridspec
-    import seaborn as sns
-    from sklearn.decomposition import PCA
-    from sklearn.linear_model import LogisticRegression
+    import torch.nn.functional as F
 
-    os.makedirs(save_dir, exist_ok=True)
+    print(f"\n{'='*60}")
+    print(f"[CPP-STPR Hard Curriculum] Phase 0: Filtering by weak confidence")
+    print(f"  Cluster method: {cluster_method}, threshold: {weak_conf_threshold}")
+    print(f"  Projector: {x_train.shape[-1]} -> {projector_hidden_dim} -> {projector_output_dim}")
+    print(f"  SupCon temp: {supcon_temperature}, STPR temp: {stpr_temperature}")
+    print(f"  Lambda SupCon: {lambda_supcon}, Lambda STPR: {lambda_stpr}")
+    print(f"{'='*60}")
 
-    # ==================================================================
-    # 1. Extract test data from eval_datasets
-    # ==================================================================
-    x_test, y_test = eval_datasets["test"]
-    _, yw_test = eval_datasets["test_weak"]
+    yw_soft = y_train.float().mean(1) if y_train.ndim == 3 else y_train.float()
+    weak_probs = yw_soft if (yw_soft.min() >= 0 and yw_soft.max() <= 1.01) else torch.softmax(yw_soft, dim=-1)
+    weak_confidence = weak_probs.max(dim=-1).values.cpu().numpy()
 
-    x_test_tensor = x_test.float().to(device)
-
-    # ==================================================================
-    # 2. Strong model predictions + entropy
-    # ==================================================================
-    model.eval()
-    with torch.no_grad():
-        logits_strong = model(x_test_tensor).detach().cpu()
-        if logits_strong.ndim > 2:
-            logits_strong = logits_strong.mean(1)
-        probs_strong = torch.softmax(logits_strong, dim=-1)
-        pred_strong  = torch.argmax(logits_strong, dim=-1)
-        entropy_strong = -(probs_strong * torch.log(probs_strong + 1e-8)).sum(dim=-1)
-
-    # ==================================================================
-    # 3. Weak predictions + entropy
-    # ==================================================================
-    y_true = y_test.argmax(-1).cpu() if y_test.ndim > 1 else y_test.cpu()
-    y_weak = yw_test.argmax(-1).cpu() if yw_test.ndim > 1 else yw_test.cpu()
-
-    weak_raw_available = "test_weak_raw" in eval_datasets
-    if weak_raw_available:
-        _, yw_test_raw = eval_datasets["test_weak_raw"]
-        if isinstance(yw_test_raw, np.ndarray):
-            yw_test_raw = torch.tensor(yw_test_raw)
-        yw_test_raw = yw_test_raw.float()
-        if yw_test_raw.min() >= 0 and yw_test_raw.max() <= 1.01:
-            weak_probs = yw_test_raw
-        else:
-            weak_probs = torch.softmax(yw_test_raw, dim=-1)
-        entropy_weak = -(weak_probs * torch.log(weak_probs + 1e-8)).sum(dim=-1).cpu()
-    else:
-        entropy_weak = torch.zeros(len(y_true))
-
-    # ---- convert to numpy ----
-    y_true_np       = y_true.numpy()
-    y_weak_np       = y_weak.numpy()
-    y_strong_np     = pred_strong.numpy()
-    entropy_weak_np = entropy_weak.numpy()
-    entropy_strong_np = entropy_strong.numpy()
-    x_test_np = x_test.cpu().numpy() if isinstance(x_test, torch.Tensor) else np.array(x_test)
-
-    # ==================================================================
-    # 4. 2-D projection
-    # ==================================================================
-    if dim_reduction == 'tsne':
-        from sklearn.manifold import TSNE
-        perp = min(30, max(5, len(x_test_np) - 1))
-        reducer = TSNE(n_components=2, random_state=42, perplexity=perp)
-        X_2d = reducer.fit_transform(x_test_np)
-    else:  # default: pca
-        reducer = PCA(n_components=2, random_state=42)
-        X_2d = reducer.fit_transform(x_test_np)
-
-    # ==================================================================
-    # 5. Define 4 logical groups
-    # ==================================================================
-    weak_correct   = (y_weak_np == y_true_np)
-    strong_correct = (y_strong_np == y_true_np)
-
-    group_A = weak_correct  & strong_correct    # Both correct  (easy)
-    group_B = ~weak_correct & strong_correct     # W2SG phenomenon ★
-    group_C = weak_correct  & ~strong_correct    # Negative transfer
-    group_D = ~weak_correct & ~strong_correct    # Both wrong (hard/noise)
-
-    # ==================================================================
-    # 6. Fit surrogate logistic regressions in 2-D for contour plots
-    # ==================================================================
-    lr_weak = LogisticRegression(max_iter=1000, multi_class='multinomial',
-                                  solver='lbfgs', random_state=42)
-    lr_weak.fit(X_2d, y_weak_np)
-
-    lr_strong = LogisticRegression(max_iter=1000, multi_class='multinomial',
-                                    solver='lbfgs', random_state=42)
-    lr_strong.fit(X_2d, y_strong_np)
-
-    # ---- mesh grid ----
-    margin = 0.08
-    rx = X_2d[:, 0].max() - X_2d[:, 0].min()
-    ry = X_2d[:, 1].max() - X_2d[:, 1].min()
-    x_min, x_max = X_2d[:, 0].min() - margin * rx, X_2d[:, 0].max() + margin * rx
-    y_min, y_max = X_2d[:, 1].min() - margin * ry, X_2d[:, 1].max() + margin * ry
-    xx, yy = np.meshgrid(np.linspace(x_min, x_max, 300),
-                          np.linspace(y_min, y_max, 300))
-    grid_pts = np.c_[xx.ravel(), yy.ravel()]
-
-    Z_weak   = lr_weak.predict(grid_pts).reshape(xx.shape)
-    Z_strong = lr_strong.predict(grid_pts).reshape(xx.shape)
-    Z_weak_conf   = lr_weak.predict_proba(grid_pts).max(axis=1).reshape(xx.shape)
-    Z_strong_conf = lr_strong.predict_proba(grid_pts).max(axis=1).reshape(xx.shape)
-
-    # ==================================================================
-    # 7. Aesthetic setup
-    # ==================================================================
-    plt.rcParams.update({
-        'font.family': 'serif',
-        'font.size': 10,
-        'axes.labelsize': 11,
-        'axes.titlesize': 12,
-        'legend.fontsize': 8,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 9,
-        'figure.dpi': 150,
-    })
-
-    unique_classes = np.unique(y_true_np)
-    n_cls = len(unique_classes)
-    cmap_cls = plt.cm.get_cmap('tab10', max(n_cls, 10))
-    dim_label = dim_reduction.upper()
-
-    # ==================================================================
-    # 8. Create figure  (2 × 3 grid)
-    # ==================================================================
-    fig = plt.figure(figsize=(20, 12))
-    gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.35, wspace=0.32)
-
-    # ---------- PLOT 1: Weak Model Decision Space ----------
-    ax1 = fig.add_subplot(gs[0, 0])
-    ax1.contourf(xx, yy, Z_weak_conf, levels=20, cmap='Blues', alpha=0.35)
-    ax1.contour(xx, yy, Z_weak, colors='navy', linewidths=0.7, alpha=0.55)
-    for ci, c in enumerate(unique_classes):
-        mask_c = y_true_np == c
-        mrk = 'o' if ci % 2 == 0 else 'x'
-        ax1.scatter(X_2d[mask_c, 0], X_2d[mask_c, 1],
-                    c=[cmap_cls(ci)], marker=mrk, s=18, alpha=0.7,
-                    edgecolors='white' if mrk == 'o' else 'none',
-                    linewidths=0.3, label=f'Class {int(c)}')
-    ax1.set_title('Plot 1: Weak Model Decision Space', fontweight='bold')
-    ax1.set_xlabel(f'{dim_label} Dim 1'); ax1.set_ylabel(f'{dim_label} Dim 2')
-    ax1.legend(loc='best', framealpha=0.85, markerscale=1.3)
-
-    # ---------- PLOT 2: Strong Model Decision Space ----------
-    ax2 = fig.add_subplot(gs[0, 1])
-    ax2.contourf(xx, yy, Z_strong_conf, levels=20, cmap='Oranges', alpha=0.35)
-    ax2.contour(xx, yy, Z_strong, colors='darkred', linewidths=0.7, alpha=0.55)
-    for ci, c in enumerate(unique_classes):
-        mask_c = y_true_np == c
-        mrk = 'o' if ci % 2 == 0 else 'x'
-        ax2.scatter(X_2d[mask_c, 0], X_2d[mask_c, 1],
-                    c=[cmap_cls(ci)], marker=mrk, s=18, alpha=0.7,
-                    edgecolors='white' if mrk == 'o' else 'none',
-                    linewidths=0.3, label=f'Class {int(c)}')
-    ax2.set_title('Plot 2: Strong Model (W2SG) Decision Space', fontweight='bold')
-    ax2.set_xlabel(f'{dim_label} Dim 1'); ax2.set_ylabel(f'{dim_label} Dim 2')
-    ax2.legend(loc='best', framealpha=0.85, markerscale=1.3)
-
-    # ---------- PLOT 3: Strong Model + 4 Groups ----------
-    ax3 = fig.add_subplot(gs[0, 2])
-    ax3.contourf(xx, yy, Z_strong_conf, levels=20, cmap='Greys', alpha=0.2)
-    ax3.contour(xx, yy, Z_strong, colors='gray', linewidths=0.5, alpha=0.35)
-
-    group_specs = [
-        (group_A, '#2ca02c', 'o',  'A: Both Correct (Easy)',       22),
-        (group_B, '#ff7f0e', '*',  'B: W2SG Phenomenon \u2605',    65),
-        (group_C, '#d62728', '^',  'C: Negative Transfer',         28),
-        (group_D, '#7f7f7f', 'x',  'D: Both Wrong (Hard)',         22),
-    ]
-    for mask, color, mrk, label, sz in group_specs:
-        if mask.sum() > 0:
-            ax3.scatter(X_2d[mask, 0], X_2d[mask, 1], c=color, marker=mrk,
-                        s=sz, alpha=0.8,
-                        label=f'{label} ({mask.sum()})',
-                        edgecolors='black' if mrk in ('o', '^', '*') else 'none',
-                        linewidths=0.3)
-    ax3.set_title('Plot 3: Strong Model + 4 Data Groups', fontweight='bold')
-    ax3.set_xlabel(f'{dim_label} Dim 1'); ax3.set_ylabel(f'{dim_label} Dim 2')
-    ax3.legend(loc='best', framealpha=0.85, fontsize=7, markerscale=1.0)
-
-    # ---------- PLOT 4: Entropy KDE ----------
-    ax4 = fig.add_subplot(gs[1, 0])
-    if weak_raw_available and entropy_weak_np.max() > 0:
-        sns.kdeplot(entropy_weak_np, ax=ax4, color='#1f77b4', fill=True,
-                    alpha=0.25, linewidth=2, label='Weak Model')
-    sns.kdeplot(entropy_strong_np, ax=ax4, color='#ff7f0e', fill=True,
-                alpha=0.25, linewidth=2, label='Strong Model (W2SG)')
-    if weak_raw_available and entropy_weak_np.max() > 0:
-        ax4.axvline(entropy_weak_np.mean(), color='#1f77b4', ls='--',
-                    alpha=0.7, lw=1, label=f'Weak mean={entropy_weak_np.mean():.3f}')
-    ax4.axvline(entropy_strong_np.mean(), color='#ff7f0e', ls='--',
-                alpha=0.7, lw=1, label=f'Strong mean={entropy_strong_np.mean():.3f}')
-    ax4.set_xlabel(r'Entropy  $H = -\sum p \log p$')
-    ax4.set_ylabel('Density')
-    ax4.set_title('Plot 4: Entropy Distribution (Weak vs Strong)', fontweight='bold')
-    ax4.legend(loc='best', framealpha=0.85)
-    ax4.set_xlim(left=0)
-
-    # ---------- PLOT 5: Weak vs Strong Entropy Scatter ----------
-    ax5 = fig.add_subplot(gs[1, 1])
-    max_ent = max(entropy_weak_np.max(), entropy_strong_np.max()) * 1.15
-    if max_ent == 0:
-        max_ent = 1.0
-    ax5.plot([0, max_ent], [0, max_ent], 'k--', lw=1, alpha=0.5, label='$y = x$')
-
-    for mask, color, mrk, label, sz in group_specs:
-        if mask.sum() > 0:
-            ax5.scatter(entropy_weak_np[mask], entropy_strong_np[mask],
-                        c=color, marker=mrk, s=sz, alpha=0.7,
-                        label=f'{label} ({mask.sum()})',
-                        edgecolors='black' if mrk in ('o', '^', '*') else 'none',
-                        linewidths=0.3)
-    ax5.set_xlabel('Weak Model Entropy')
-    ax5.set_ylabel('Strong Model (W2SG) Entropy')
-    ax5.set_title('Plot 5: Entropy Weak vs Strong (by Group)', fontweight='bold')
-    ax5.legend(loc='best', framealpha=0.85, fontsize=7, markerscale=1.0)
-    ax5.set_xlim(left=0); ax5.set_ylim(bottom=0)
-
-    # ---------- PLOT 6 (slot): Summary Statistics ----------
-    ax6 = fig.add_subplot(gs[1, 2])
-    ax6.axis('off')
-
-    n_total = len(y_true_np)
-    summary = (
-        f"W2SG Analysis Summary  (Seed {seed})\n"
-        f"{'=' * 44}\n"
-        f"Total test samples:  {n_total}\n"
-        f"Dim. reduction:      {dim_label}\n\n"
-        f"Group A (Both Correct):     {group_A.sum():5d}  "
-        f"({group_A.sum() / n_total * 100:5.1f}%)\n"
-        f"Group B (W2SG Phenomenon):  {group_B.sum():5d}  "
-        f"({group_B.sum() / n_total * 100:5.1f}%)\n"
-        f"Group C (Neg. Transfer):    {group_C.sum():5d}  "
-        f"({group_C.sum() / n_total * 100:5.1f}%)\n"
-        f"Group D (Both Wrong):       {group_D.sum():5d}  "
-        f"({group_D.sum() / n_total * 100:5.1f}%)\n\n"
-        f"Weak  Accuracy:  {weak_correct.sum() / n_total * 100:.1f}%\n"
-        f"Strong Accuracy: {strong_correct.sum() / n_total * 100:.1f}%\n\n"
-        f"Mean Entropy (Weak):    {entropy_weak_np.mean():.4f}\n"
-        f"Mean Entropy (Strong):  {entropy_strong_np.mean():.4f}\n"
+    keep_mask, weak_cluster_info = cluster_by_confidence_v2(
+        weak_confidence, labels=y_train, n_classes=n_classes,
+        method=cluster_method, threshold=weak_conf_threshold, min_samples_per_class=5
     )
-    ax6.text(0.05, 0.95, summary, transform=ax6.transAxes,
-             fontsize=9, verticalalignment='top', fontfamily='monospace',
-             bbox=dict(boxstyle='round,pad=0.6', facecolor='#fffde7',
-                       edgecolor='#bdbdbd', alpha=0.9))
 
-    # ==================================================================
-    # 9. Save
-    # ==================================================================
-    save_path = os.path.join(save_dir, f"seed{seed}_w2sg_{dim_label.lower()}.png")
-    fig.savefig(save_path, dpi=200, bbox_inches='tight', facecolor='white')
-    plt.close(fig)
+    n_before = len(x_train)
+    x_filt = x_train[keep_mask]
+    y_filt = y_train[keep_mask]
+    n_after = len(x_filt)
 
-    msg = f"[W2SG Plot] Saved to: {save_path}"
-    if logger:
-        logger.info(msg)
+    balance_before = compute_class_balance_stats(y_train, n_classes)
+    print(f"  === Class Balance BEFORE filtering ===")
+    print(format_balance_stats(balance_before, prefix="    "))
+    print(f"  Samples: {n_before} -> {n_after} ({n_after/n_before*100:.1f}%), removed {n_before-n_after}")
+    balance_after = compute_class_balance_stats(y_filt, n_classes)
+    print(f"  === Class Balance AFTER filtering ===")
+    print(format_balance_stats(balance_after, prefix="    "))
+
+    x_filt = x_filt.float()
+    if y_filt.ndim == 3:
+        y_hard = y_filt.float().mean(1).argmax(-1)
+    elif y_filt.ndim == 2:
+        y_hard = y_filt.argmax(-1)
     else:
-        print(msg)
+        y_hard = y_filt
 
-    return save_path
+    input_dim = x_filt.shape[-1]
+    projector = CPPProjector(input_dim, projector_hidden_dim, projector_output_dim).to(device)
+    ncc = NearestCentroidClassifier(n_classes)
+    weights_tensor = torch.ones(n_after)
+
+    train_ds = torch.utils.data.TensorDataset(x_filt, y_hard, torch.arange(n_after), weights_tensor)
+    train_loader = torch.utils.data.DataLoader(train_ds, shuffle=True, batch_size=batch_size)
+
+    optimizer = torch.optim.Adam(projector.parameters(), weight_decay=weight_decay, lr=lr)
+    n_batches = len(train_loader)
+    n_iter = n_batches * n_epochs
+    iter_i = 0
+    schedule = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimizer, T_max=n_iter)
+
+    results = {f"{key}_all": [] for key in eval_datasets.keys()}
+    results["hard_curriculum_info"] = []
+
+    for epoch in (pbar := tqdm.tqdm(range(n_epochs), desc="Epoch 0")):
+        if epoch >= warmup_hard_epochs:
+            projector.eval()
+            with torch.no_grad():
+                v_all = projector(x_filt.to(device))
+            ncc.fit(v_all, y_hard.to(device))
+            with torch.no_grad():
+                ncc_conf = torch.softmax(ncc.predict_with_logits(v_all), dim=-1).max(-1).values.cpu().numpy()
+            easy_mask, _ = cluster_by_confidence(ncc_conf, method=cluster_method, threshold=w2sg_conf_threshold)
+            hard_indices = torch.from_numpy(~easy_mask).bool()
+            weights_tensor.fill_(1.0)
+            weights_tensor[hard_indices] = hard_weight
+            n_easy, n_hard = int(easy_mask.sum()), int((~easy_mask).sum())
+            results["hard_curriculum_info"].append({'epoch': epoch, 'phase': 'hard_curriculum', 'n_easy': n_easy, 'n_hard': n_hard})
+            if epoch == warmup_hard_epochs or (epoch + 1) % 5 == 0:
+                print(f"\n  [Epoch {epoch}] CPP-STPR Split: Easy={n_easy} Hard={n_hard} (weight={hard_weight})")
+        else:
+            weights_tensor.fill_(1.0)
+            n_easy, n_hard = n_after, 0
+            results["hard_curriculum_info"].append({'epoch': epoch, 'phase': 'warmup', 'n_samples': n_after})
+
+        projector.train()
+        ep_supcon, ep_stpr = 0.0, 0.0
+        for b_i, (x, y, sidx, sw) in enumerate(train_loader):
+            x, y, sw = x.to(device), y.to(device), sw.to(device)
+            optimizer.zero_grad()
+            z = x
+            v = projector(z)
+            v_norm = F.normalize(v, dim=-1)
+            l_sup = supervised_contrastive_loss(v_norm, y, temperature=supcon_temperature)
+            l_stp = topology_regularization_loss(z, v, y, n_classes, tau=stpr_temperature)
+            w_mean = sw.mean()
+            loss = lambda_supcon * l_sup * w_mean + lambda_stpr * l_stp
+            loss.backward()
+            optimizer.step()
+            schedule.step()
+            iter_i += 1
+            ep_supcon += l_sup.item()
+            ep_stpr += l_stp.item()
+
+        projector.eval()
+        with torch.no_grad():
+            v_all = projector(x_filt.to(device))
+        ncc.fit(v_all, y_hard.to(device))
+        with torch.no_grad():
+            train_acc = (ncc.predict(v_all) == y_hard.to(device)).float().mean().item()
+
+        phase_str = "warmup" if epoch < warmup_hard_epochs else f"E={n_easy}/H={n_hard}"
+        pbar.set_description(f"Epoch {epoch}, Acc {train_acc:.3f}, SC {ep_supcon/max(n_batches,1):.4f}, ST {ep_stpr/max(n_batches,1):.4f} [{phase_str}]")
+
+        with torch.no_grad():
+            for key, (xt, yt) in eval_datasets.items():
+                vt = projector(xt.float().to(device))
+                pred = ncc.predict(vt).detach().cpu()
+                yt_f = yt.argmax(-1) if yt.ndim > 1 else yt
+                results[f"{key}_all"].append((pred == yt_f.to(pred.device)).float().mean())
+
+        if (epoch + 1) % 5 == 0 and "test" in eval_datasets and "test_weak" in eval_datasets:
+            for sn, gk, wk, wrk in [("Val", "val", "val_weak", "val_weak_raw"), ("Test", "test", "test_weak", "test_weak_raw")]:
+                with torch.no_grad():
+                    xt2, yt2 = eval_datasets[gk]
+                    _, ywt = eval_datasets[wk]
+                    lt = ncc.predict_with_logits(projector(xt2.float().to(device))).detach().cpu()
+                    pt2 = torch.softmax(lt, -1)
+                    ent = -(pt2 * torch.log(pt2 + 1e-8)).sum(-1)
+                    predt = lt.argmax(-1)
+                    conf = pt2.max(-1).values
+                    ytf = yt2.argmax(-1).cpu() if yt2.ndim > 1 else yt2.cpu()
+                    ywf = ywt.argmax(-1).cpu() if ywt.ndim > 1 else ywt.cpu()
+                    sc = (predt == ytf); wc = (ywf == ytf); nt = len(ytf)
+                    mbc = sc & wc; mwc = sc & ~wc; mcw = ~sc & wc; mbw = ~sc & ~wc
+                    def _p(m): return m.float().sum().item()/nt*100
+                    def _a(v2, m): return v2[m].mean().item() if m.any() else float('nan')
+                    print(f"  [Epoch {epoch+1}] {sn}: BC={_p(mbc):.1f}% WC={_p(mwc):.1f}% CW={_p(mcw):.1f}% BW={_p(mbw):.1f}%")
+            with torch.no_grad():
+                x_t, y_t = eval_datasets["val"]
+                _, yw_t = eval_datasets["val_weak"]  # yw_t are weak hard labels
+                weak_raw_available = "val_weak_raw" in eval_datasets
+                if weak_raw_available:
+                    _, yw_t_raw = eval_datasets["val_weak_raw"]
+                    if type(yw_t_raw) == np.ndarray:
+                        yw_t_raw = torch.tensor(yw_t_raw, device=device)
+                    elif type(yw_t_raw) == torch.Tensor:
+                        yw_t_raw = yw_t_raw.to(device)
+
+                x_t = x_t.float().to(device)
+                logits_t = ncc.predict_with_logits(projector(x_t)).detach().cpu()
+                if logits_t.ndim > 2:
+                    logits_t = logits_t.mean(1)
+
+                # Compute softmax probabilities and entropy: H = -sum(p * log(p))
+                probs_t = torch.softmax(logits_t, dim=-1)
+                log_probs_t = torch.log(probs_t + 1e-8)  # add eps to avoid log(0)
+                entropy_t = -(probs_t * log_probs_t).sum(dim=-1)  # shape: (n_test,)
+
+                pred_t = torch.argmax(logits_t, dim=-1)
+                
+                # We need to compute weak confidence
+                if weak_raw_available:
+                    # yw_t_raw might be logits or probabilities
+                    # To be safe, if min >= 0 and max <= 1.01 it's likely probs, else logits
+                    if yw_t_raw.min() >= 0 and yw_t_raw.max() <= 1.01:
+                        weak_probs_t = yw_t_raw
+                    else:
+                        weak_probs_t = torch.softmax(yw_t_raw, dim=-1)
+                    weak_confidence_t = weak_probs_t.max(dim=-1).values.detach().cpu()
+                else:
+                    weak_confidence_t = torch.zeros(len(y_t))
+
+                y_t_flat = y_t.argmax(-1) if y_t.ndim > 1 else y_t
+                yw_t_flat = yw_t.argmax(-1) if yw_t.ndim > 1 else yw_t
+                
+                y_t_flat = y_t_flat.cpu()
+                yw_t_flat = yw_t_flat.cpu()
+                w2sg_correct = (pred_t == y_t_flat)
+                weak_correct = (yw_t_flat == y_t_flat)
+                n_test = len(y_t_flat)
+
+                # Masks for 4 cases
+                mask_both_correct = w2sg_correct & weak_correct
+                mask_w2sg_correct_weak_wrong = w2sg_correct & ~weak_correct
+                mask_w2sg_wrong_weak_correct = ~w2sg_correct & weak_correct
+                mask_both_wrong = ~w2sg_correct & ~weak_correct
+
+                both_correct = mask_both_correct.float().sum().item() / n_test * 100
+                w2sg_correct_weak_wrong = mask_w2sg_correct_weak_wrong.float().sum().item() / n_test * 100
+                w2sg_wrong_weak_correct = mask_w2sg_wrong_weak_correct.float().sum().item() / n_test * 100
+                both_wrong = mask_both_wrong.float().sum().item() / n_test * 100
+
+                # Average entropy for each case
+                ent_both = entropy_t[mask_both_correct].mean().item() if mask_both_correct.any() else float('nan')
+                ent_w2sg_right_weak_wrong = entropy_t[mask_w2sg_correct_weak_wrong].mean().item() if mask_w2sg_correct_weak_wrong.any() else float('nan')
+                ent_w2sg_wrong_weak_right = entropy_t[mask_w2sg_wrong_weak_correct].mean().item() if mask_w2sg_wrong_weak_correct.any() else float('nan')
+                ent_both_wrong = entropy_t[mask_both_wrong].mean().item() if mask_both_wrong.any() else float('nan')
+
+                # Average confidence (max softmax probability) for each case
+                confidence_t = probs_t.max(dim=-1).values  # shape: (n_test,)
+                conf_both = confidence_t[mask_both_correct].mean().item() if mask_both_correct.any() else float('nan')
+                conf_w2sg_right_weak_wrong = confidence_t[mask_w2sg_correct_weak_wrong].mean().item() if mask_w2sg_correct_weak_wrong.any() else float('nan')
+                conf_w2sg_wrong_weak_right = confidence_t[mask_w2sg_wrong_weak_correct].mean().item() if mask_w2sg_wrong_weak_correct.any() else float('nan')
+                conf_both_wrong = confidence_t[mask_both_wrong].mean().item() if mask_both_wrong.any() else float('nan')
+                
+                # Average weak confidence for each case
+                weak_conf_both = weak_confidence_t[mask_both_correct].mean().item() if mask_both_correct.any() else float('nan')
+                weak_conf_w2sg_right_weak_wrong = weak_confidence_t[mask_w2sg_correct_weak_wrong].mean().item() if mask_w2sg_correct_weak_wrong.any() else float('nan')
+                weak_conf_w2sg_wrong_weak_right = weak_confidence_t[mask_w2sg_wrong_weak_correct].mean().item() if mask_w2sg_wrong_weak_correct.any() else float('nan')
+                weak_conf_both_wrong = weak_confidence_t[mask_both_wrong].mean().item() if mask_both_wrong.any() else float('nan')
+
+                print(f"  [Epoch {epoch+1}] Train w2sg set breakdown:")
+                print(f"    w2sg correct & weak correct: {both_correct:.2f}%  | avg entropy: {ent_both:.4f}  | w2sg conf: {conf_both:.4f} | weak conf: {weak_conf_both:.4f}")
+                print(f"    w2sg correct & weak wrong:   {w2sg_correct_weak_wrong:.2f}%  | avg entropy: {ent_w2sg_right_weak_wrong:.4f}  | w2sg conf: {conf_w2sg_right_weak_wrong:.4f} | weak conf: {weak_conf_w2sg_right_weak_wrong:.4f}")
+                print(f"    w2sg wrong   & weak correct: {w2sg_wrong_weak_correct:.2f}%  | avg entropy: {ent_w2sg_wrong_weak_right:.4f}  | w2sg conf: {conf_w2sg_wrong_weak_right:.4f} | weak conf: {weak_conf_w2sg_wrong_weak_right:.4f}")
+                print(f"    w2sg wrong   & weak wrong:   {both_wrong:.2f}%  | avg entropy: {ent_both_wrong:.4f}  | w2sg conf: {conf_both_wrong:.4f} | weak conf: {weak_conf_both_wrong:.4f}")
+
+            with torch.no_grad():
+                x_t, y_t = eval_datasets["test"]
+                _, yw_t = eval_datasets["test_weak"]  # yw_t are weak hard labels
+                weak_raw_available = "test_weak_raw" in eval_datasets
+                if weak_raw_available:
+                    _, yw_t_raw = eval_datasets["test_weak_raw"]
+                    if type(yw_t_raw) == np.ndarray:
+                        yw_t_raw = torch.tensor(yw_t_raw, device=device)
+                    elif type(yw_t_raw) == torch.Tensor:
+                        yw_t_raw = yw_t_raw.to(device)
+
+                x_t = x_t.float().to(device)
+                logits_t = ncc.predict_with_logits(projector(x_t)).detach().cpu()
+                if logits_t.ndim > 2:
+                    logits_t = logits_t.mean(1)
+
+                # Compute softmax probabilities and entropy
+                probs_t = torch.softmax(logits_t, dim=-1)
+                log_probs_t = torch.log(probs_t + 1e-8)
+                entropy_t = -(probs_t * log_probs_t).sum(dim=-1)
+
+                pred_t = torch.argmax(logits_t, dim=-1)
+
+                # Compute weak confidence
+                if weak_raw_available:
+                    if yw_t_raw.min() >= 0 and yw_t_raw.max() <= 1.01:
+                        weak_probs_t = yw_t_raw
+                    else:
+                        weak_probs_t = torch.softmax(yw_t_raw, dim=-1)
+                    weak_confidence_t = weak_probs_t.max(dim=-1).values.detach().cpu()
+                else:
+                    weak_confidence_t = torch.zeros(len(y_t))
+
+                y_t_flat = y_t.argmax(-1) if y_t.ndim > 1 else y_t
+                yw_t_flat = yw_t.argmax(-1) if yw_t.ndim > 1 else yw_t
+
+                y_t_flat = y_t_flat.cpu()
+                yw_t_flat = yw_t_flat.cpu()
+                w2sg_correct = (pred_t == y_t_flat)
+                weak_correct = (yw_t_flat == y_t_flat)
+                n_test = len(y_t_flat)
+
+                # Masks for 4 cases
+                mask_both_correct = w2sg_correct & weak_correct
+                mask_w2sg_correct_weak_wrong = w2sg_correct & ~weak_correct
+                mask_w2sg_wrong_weak_correct = ~w2sg_correct & weak_correct
+                mask_both_wrong = ~w2sg_correct & ~weak_correct
+
+                both_correct = mask_both_correct.float().sum().item() / n_test * 100
+                w2sg_correct_weak_wrong = mask_w2sg_correct_weak_wrong.float().sum().item() / n_test * 100
+                w2sg_wrong_weak_correct = mask_w2sg_wrong_weak_correct.float().sum().item() / n_test * 100
+                both_wrong = mask_both_wrong.float().sum().item() / n_test * 100
+
+                # Average entropy for each case
+                ent_both = entropy_t[mask_both_correct].mean().item() if mask_both_correct.any() else float('nan')
+                ent_w2sg_right_weak_wrong = entropy_t[mask_w2sg_correct_weak_wrong].mean().item() if mask_w2sg_correct_weak_wrong.any() else float('nan')
+                ent_w2sg_wrong_weak_right = entropy_t[mask_w2sg_wrong_weak_correct].mean().item() if mask_w2sg_wrong_weak_correct.any() else float('nan')
+                ent_both_wrong = entropy_t[mask_both_wrong].mean().item() if mask_both_wrong.any() else float('nan')
+
+                # Average confidence (max softmax probability) for each case
+                confidence_t = probs_t.max(dim=-1).values
+                conf_both = confidence_t[mask_both_correct].mean().item() if mask_both_correct.any() else float('nan')
+                conf_w2sg_right_weak_wrong = confidence_t[mask_w2sg_correct_weak_wrong].mean().item() if mask_w2sg_correct_weak_wrong.any() else float('nan')
+                conf_w2sg_wrong_weak_right = confidence_t[mask_w2sg_wrong_weak_correct].mean().item() if mask_w2sg_wrong_weak_correct.any() else float('nan')
+                conf_both_wrong = confidence_t[mask_both_wrong].mean().item() if mask_both_wrong.any() else float('nan')
+
+                # Average weak confidence for each case
+                weak_conf_both = weak_confidence_t[mask_both_correct].mean().item() if mask_both_correct.any() else float('nan')
+                weak_conf_w2sg_right_weak_wrong = weak_confidence_t[mask_w2sg_correct_weak_wrong].mean().item() if mask_w2sg_correct_weak_wrong.any() else float('nan')
+                weak_conf_w2sg_wrong_weak_right = weak_confidence_t[mask_w2sg_wrong_weak_correct].mean().item() if mask_w2sg_wrong_weak_correct.any() else float('nan')
+                weak_conf_both_wrong = weak_confidence_t[mask_both_wrong].mean().item() if mask_both_wrong.any() else float('nan')
+
+                print(f"  [Epoch {epoch+1}] Test set breakdown:")
+                print(f"    w2sg correct & weak correct: {both_correct:.2f}%  | avg entropy: {ent_both:.4f}  | w2sg conf: {conf_both:.4f} | weak conf: {weak_conf_both:.4f}")
+                print(f"    w2sg correct & weak wrong:   {w2sg_correct_weak_wrong:.2f}%  | avg entropy: {ent_w2sg_right_weak_wrong:.4f}  | w2sg conf: {conf_w2sg_right_weak_wrong:.4f} | weak conf: {weak_conf_w2sg_right_weak_wrong:.4f}")
+                print(f"    w2sg wrong   & weak correct: {w2sg_wrong_weak_correct:.2f}%  | avg entropy: {ent_w2sg_wrong_weak_right:.4f}  | w2sg conf: {conf_w2sg_wrong_weak_right:.4f} | weak conf: {weak_conf_w2sg_wrong_weak_right:.4f}")
+                print(f"    w2sg wrong   & weak wrong:   {both_wrong:.2f}%  | avg entropy: {ent_both_wrong:.4f}  | w2sg conf: {conf_both_wrong:.4f} | weak conf: {weak_conf_both_wrong:.4f}")
+
+
+    for key in eval_datasets.keys():
+        results[key] = results[f"{key}_all"][-1]
+    results['_balance_before'] = balance_before
+    results['_balance_after'] = balance_after
+    return results, {'projector': projector, 'ncc': ncc, 'type': 'cpp_stpr'}
+
+
+# =============================================================================
+# train_head_DG_hard_disme: DG wrapper calling train_logreg_hard_disme
+# =============================================================================
+def train_head_DG_hard_disme(
+    teacher_model, student_model, val_dataloader, test_dataloader,
+    cfg, logger, cached_labels_path, cached_embs_path, results, rng, n_classes,
+    return_data=False, additional_eval_data=None,
+    before_optim_run_callback_weak=None, before_optim_run_callback_gt=None,
+    after_batch_callback_weak=None, before_batch_callback_weak=None,
+    after_batch_callback_gt=None, before_batch_callback_gt=None,
+):
+    """
+    train_head_DG with CPP-STPR hard sample curriculum learning.
+    Same data loading/splitting as train_head_DG_hard but calls
+    train_logreg_hard_disme (Projector + SupCon + STPR + NCC) for w2s training.
+    """
+    ### get (weak) labels from current teacher
+    if cfg["w2s"]["load_labels"] and os.path.exists(cached_labels_path):
+        logger.info("Loading teacher labels from cache...")
+        cached = torch.load(cached_labels_path, pickle_module=dill, map_location="cpu")
+        val_gt_labels, val_teacher_labels = cached["val_gt_labels"], cached["val_teacher_labels"]
+        test_gt_labels, test_teacher_labels = cached["test_gt_labels"], cached["test_teacher_labels"]
+        teacher_acc = cached.get("teacher_acc", 0)
+    else:
+        chunking_dir = os.path.join(os.path.dirname(cached_labels_path), f"label_chunks_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        os.makedirs(chunking_dir, exist_ok=True)
+        logger.info("Collecting teacher labels for Validation Set...")
+        _, val_gt_labels, val_teacher_labels, val_teacher_acc, _, _ = preload(model=partial(teacher_model, combine_logits=False, collect_embeddings=False), loader=val_dataloader, device=cfg["device"], store_embs=False, store_inps=False, chunking_dir=os.path.join(chunking_dir, 'val'))
+        logger.info("Collecting teacher labels for Test Set...")
+        _, test_gt_labels, test_teacher_labels, test_teacher_acc, _, _ = preload(model=partial(teacher_model, combine_logits=False, collect_embeddings=False), loader=test_dataloader, device=cfg["device"], store_embs=False, store_inps=False, chunking_dir=os.path.join(chunking_dir, 'test'))
+        teacher_acc = float((np.mean(val_teacher_acc) + np.mean(test_teacher_acc)) / 2.0)
+        if cfg["w2s"]["save_labels"]:
+            torch.save({"cfg": cfg, "val_gt_labels": val_gt_labels, "val_teacher_labels": val_teacher_labels, "test_gt_labels": test_gt_labels, "test_teacher_labels": test_teacher_labels, "teacher_acc": teacher_acc}, cached_labels_path, pickle_module=dill)
+
+    ### get embeddings from the student model
+    if cfg["w2s"]["load_embeddings"] and os.path.exists(cached_embs_path):
+        logger.info("Loading student model embeddings from cache...")
+        cached = torch.load(cached_embs_path, pickle_module=dill)
+        val_student_embeddings, val_student_gt_labels = cached["val_embeddings"], cached["val_gt_labels"]
+        test_student_embeddings, test_student_gt_labels = cached["test_embeddings"], cached["test_gt_labels"]
+    else:
+        chunking_dir = os.path.join(os.path.dirname(cached_embs_path), f"embs_chunks_{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
+        os.makedirs(chunking_dir, exist_ok=True)
+        logger.info("Collecting student embeddings for Validation Set...")
+        val_student_embeddings, val_student_gt_labels, _, _, _, _ = preload(model=student_model, loader=val_dataloader, device=cfg["device"], chunking_dir=os.path.join(chunking_dir, 'val'), store_embs=True)
+        logger.info("Collecting student embeddings for Test Set...")
+        test_student_embeddings, test_student_gt_labels, _, _, _, _ = preload(model=student_model, loader=test_dataloader, device=cfg["device"], chunking_dir=os.path.join(chunking_dir, 'test'), store_embs=True)
+        if cfg["w2s"]["save_embeddings"]:
+            torch.save({"cfg": cfg, "val_embeddings": val_student_embeddings, "val_gt_labels": val_student_gt_labels, "test_embeddings": test_student_embeddings, "test_gt_labels": test_student_gt_labels}, cached_embs_path, pickle_module=dill)
+
+    assert torch.all(val_gt_labels == val_student_gt_labels), "Val GT labels mismatch."
+    assert torch.all(test_gt_labels == test_student_gt_labels), "Test GT labels mismatch."
+    del val_student_gt_labels, test_student_gt_labels
+
+    ### Shuffle and split VAL data
+    order = np.arange(len(val_gt_labels))
+    rng.shuffle(order)
+    results["order"].append(order)
+    x_val_all = val_student_embeddings[order]
+    y_val_all = val_gt_labels[order]
+    yw_val_all = val_teacher_labels[order]
+
+    assert len(cfg["w2s"]["train_val_test_split_DG"]) == 2
+    assert sum(cfg["w2s"]["train_val_test_split_DG"]) == 1.0
+    n_train = int(cfg["w2s"]["train_val_test_split_DG"][0] * len(x_val_all))
+
+    x_train, x_val = x_val_all[:n_train], x_val_all[n_train:]
+    y_train, y_val = y_val_all[:n_train], y_val_all[n_train:]
+    yw_train, yw_val = yw_val_all[:n_train], yw_val_all[n_train:]
+    x_test, y_test, yw_test = test_student_embeddings, test_gt_labels, test_teacher_labels
+
+    x = torch.cat([x_train, x_val, x_test]) if isinstance(x_train, torch.Tensor) else np.concatenate([x_train, x_val, x_test])
+    y = torch.cat([y_train, y_val, y_test]) if isinstance(y_train, torch.Tensor) else np.concatenate([y_train, y_val, y_test])
+    yw = torch.cat([yw_train, yw_val, yw_test]) if isinstance(yw_train, torch.Tensor) else np.concatenate([yw_train, yw_val, yw_test])
+
+    yw_val_raw = yw_val.mean(1) if yw_val.ndim == 3 else yw_val
+    yw_val = yw_val_raw.argmax(-1)
+    yw_test_raw = yw_test.mean(1) if yw_test.ndim == 3 else yw_test
+    yw_test = yw_test_raw.argmax(-1)
+
+    eval_datasets = {"val": (x_val, y_val), "val_weak": (x_val, yw_val), "val_weak_raw": (x_val, yw_val_raw), "test": (x_test, y_test), "test_weak": (x_test, yw_test), "test_weak_raw": (x_test, yw_test_raw)}
+    if additional_eval_data is not None:
+        for k, v in additional_eval_data.items():
+            eval_datasets[k] = v
+
+    logger.info(f"\nTotal: {len(x)}. Train: {len(x_train)}, Val: {len(x_val)}, Test: {len(x_test)}")
+
+    ### eval teacher
+    results["teacher_acc_src"].append(teacher_acc)
+    teacher_acc_all = (y == (yw if yw.ndim == 2 else yw.mean(1)).argmax(-1)).float().mean()
+    results["teacher_acc"].append(teacher_acc_all)
+    results["teacher_acc_train"].append((y_train == (yw_train if yw_train.ndim == 2 else yw_train.mean(1)).argmax(-1)).float().mean())
+    results["teacher_acc_val"].append((y_val == yw_val).float().mean())
+    results["teacher_acc_test"].append((y_test == yw_test).float().mean())
+    if type(teacher_acc) == float:
+        teacher_acc = torch.tensor([teacher_acc], device=cfg["device"])
+    logger.info(f"Teacher acc - all: {teacher_acc_all:.4f}")
+
+    ### w2s with CPP-STPR hard curriculum
+    if before_optim_run_callback_weak is not None:
+        before_optim_run_callback_weak(yw=yw_train, sample_idxs=np.arange(len(yw_train)))
+    seed_all(cfg["seed"])
+
+    hard_kwargs = {
+        'warmup_hard_epochs': cfg["w2s"].get("warmup_hard_epochs", 5),
+        'hard_weight': cfg["w2s"].get("hard_weight", 2.0),
+        'cluster_method': cfg["w2s"].get("cluster_method", "kmeans"),
+        'weak_conf_threshold': cfg["w2s"].get("weak_conf_threshold", 0.6),
+        'w2sg_conf_threshold': cfg["w2s"].get("w2sg_conf_threshold", 0.6),
+    }
+    disme_kwargs = {
+        'projector_hidden_dim': cfg["w2s"].get("projector_hidden_dim", 512),
+        'projector_output_dim': cfg["w2s"].get("projector_output_dim", 256),
+        'supcon_temperature': cfg["w2s"].get("supcon_temperature", 0.07),
+        'stpr_temperature': cfg["w2s"].get("stpr_temperature", 1.0),
+        'lambda_supcon': cfg["w2s"].get("lambda_supcon", 1.0),
+        'lambda_stpr': cfg["w2s"].get("lambda_stpr", 0.5),
+    }
+    logger.info(f"CPP-STPR params: {hard_kwargs} | {disme_kwargs}")
+
+    results_teacher_to_student, student_model_probe = train_logreg_hard_disme(
+        x_train, yw_train, eval_datasets, device=cfg["device"],
+        batch_size=cfg["w2s"]["batch_size"],
+        loss_fn=LOSS_DICT[cfg["w2s"]["teacher_labels_loss_fn_name"]](**(cfg["w2s"]["teacher_labels_loss_fn_kwargs"] or dict())),
+        n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
+        n_classes=n_classes, sample_weights=None,
+        before_batch_callback=before_batch_callback_weak,
+        after_batch_callback=after_batch_callback_weak,
+        **hard_kwargs, **disme_kwargs,
+    )
+    results["results_teacher_to_student"].append(results_teacher_to_student)
+    results["student_model_probe"].append(student_model_probe)
+
+    ### gt
+    if before_optim_run_callback_gt is not None:
+        before_optim_run_callback_gt(yw=yw_test, sample_idxs=len(y_train) + len(y_val) + np.arange(len(yw_test)))
+    seed_all(cfg["seed"])
+    results_gt, gt_model_probe = train_logreg(x_train, y_train, eval_datasets, device=cfg["device"], batch_size=cfg["w2s"]["batch_size"],
+        loss_fn=LOSS_DICT[cfg["w2s"]["gt_labels_loss_fn_name"]](**(cfg["w2s"]["gt_labels_loss_fn_kwargs"] or dict())), n_epochs=cfg["w2s"]["n_epochs"], lr=cfg["w2s"]["lr"],
+        n_classes=n_classes, sample_weights=None, before_batch_callback=before_batch_callback_gt, after_batch_callback=after_batch_callback_gt)
+    results["results_gt"].append(results_gt)
+
+    ### W2SG visualization
+    _balance_stats = None
+    if '_balance_before' in results_teacher_to_student and '_balance_after' in results_teacher_to_student:
+        _balance_stats = {'before': results_teacher_to_student['_balance_before'], 'after': results_teacher_to_student['_balance_after']}
+    if cfg["w2s"].get("plot_w2sg", False):
+        _plot_dir = cfg["w2s"].get("plot_save_dir", None)
+        if _plot_dir:
+            _dim_methods = cfg["w2s"].get("plot_dim_reduction", ["pca"])
+            if isinstance(_dim_methods, str):
+                _dim_methods = [_dim_methods]
+            for _dm in _dim_methods:
+                try:
+                    plot_w2sg_analysis(model=student_model_probe, gt_model=gt_model_probe, eval_datasets=eval_datasets, save_dir=_plot_dir, seed=cfg["seed"], device=cfg["device"], dim_reduction=_dm, balance_stats=_balance_stats, logger=logger)
+                except Exception as _plot_err:
+                    logger.info(f"[W2SG Plot] Warning: plotting failed ({_dm}): {_plot_err}")
+
+    if return_data:
+        return results, student_model_probe, {"x": x, "y": y, "yw": yw, "x_train": x_train, "y_train": y_train, "x_val": x_val, "y_val": y_val, "x_test": x_test, "y_test": y_test, "yw_train": yw_train, "yw_val": yw_val, "yw_test": yw_test}
+    return results, student_model_probe
 
 
 def train(
