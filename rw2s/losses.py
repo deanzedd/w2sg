@@ -253,6 +253,100 @@ class edl_log_loss_fn(LossFnBase):
         return self.apply_reduction(loss, reduction)
 
 
+
+# =============================================================================
+# SAM: Sharpness-Aware Minimization (Foret et al., ICLR 2021)
+# Reference: https://arxiv.org/abs/2010.01412
+# Adapted from: https://github.com/davda54/sam
+# =============================================================================
+class SAM(torch.optim.Optimizer):
+    """
+    Sharpness-Aware Minimization optimizer wrapper.
+
+    SAM simultaneously minimizes loss value and loss sharpness by seeking
+    parameters that lie in neighborhoods having uniformly low loss.
+    It wraps a base optimizer (e.g., Adam, SGD) and performs two forward-backward
+    passes per optimization step:
+      1. first_step: perturb weights to the worst-case point w + e(w)
+      2. second_step: compute gradients at the perturbed point and update
+         the original weights using the base optimizer
+
+    Args:
+        params: model parameters
+        base_optimizer: optimizer class (e.g., torch.optim.Adam)
+        rho (float): neighborhood radius for perturbation (default: 0.05)
+        adaptive (bool): if True, use adaptive SAM (ASAM) scaling (default: False)
+        **kwargs: additional arguments passed to the base optimizer (lr, weight_decay, etc.)
+    """
+
+    def __init__(self, params, base_optimizer, rho=0.05, adaptive=False, **kwargs):
+        assert rho >= 0.0, f"Invalid rho, should be non-negative: {rho}"
+
+        defaults = dict(rho=rho, adaptive=adaptive, **kwargs)
+        super(SAM, self).__init__(params, defaults)
+
+        self.base_optimizer = base_optimizer(self.param_groups, **kwargs)
+        self.param_groups = self.base_optimizer.param_groups
+        self.defaults.update(self.base_optimizer.defaults)
+
+    @torch.no_grad()
+    def first_step(self, zero_grad=False):
+        """Perturb weights to the worst-case point w + e(w) within the rho-neighborhood."""
+        grad_norm = self._grad_norm()
+        for group in self.param_groups:
+            scale = group["rho"] / (grad_norm + 1e-12)
+
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                self.state[p]["old_p"] = p.data.clone()
+                e_w = (torch.pow(p, 2) if group["adaptive"] else 1.0) * p.grad * scale.to(p)
+                p.add_(e_w)  # climb to the local maximum "w + e(w)"
+
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def second_step(self, zero_grad=False):
+        """Restore original weights and perform the actual sharpness-aware update."""
+        for group in self.param_groups:
+            for p in group["params"]:
+                if p.grad is None:
+                    continue
+                p.data = self.state[p]["old_p"]  # get back to "w" from "w + e(w)"
+
+        self.base_optimizer.step()  # do the actual "sharpness-aware" update
+
+        if zero_grad:
+            self.zero_grad()
+
+    @torch.no_grad()
+    def step(self, closure=None):
+        """Performs both optimization steps in a single call using a closure."""
+        assert closure is not None, "SAM requires closure, but it was not provided"
+        closure = torch.enable_grad()(closure)
+
+        self.first_step(zero_grad=True)
+        closure()
+        self.second_step()
+
+    def _grad_norm(self):
+        shared_device = self.param_groups[0]["params"][0].device
+        norm = torch.norm(
+            torch.stack([
+                ((torch.abs(p) if group["adaptive"] else 1.0) * p.grad).norm(p=2).to(shared_device)
+                for group in self.param_groups for p in group["params"]
+                if p.grad is not None
+            ]),
+            p=2
+        )
+        return norm
+
+    def load_state_dict(self, state_dict):
+        super().load_state_dict(state_dict)
+        self.base_optimizer.param_groups = self.param_groups
+
+
 LOSS_DICT = {
     "logconf": logconf_loss_fn,
     "adapt_logconf": adapt_logconf_loss_fn,

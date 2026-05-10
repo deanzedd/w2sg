@@ -20,7 +20,7 @@ from functools import partial
 
 from rw2s.utils import preload, get_cache_paths, seed_all, slugify
 from rw2s.losses import LOSS_DICT
-from rw2s.train import train, train_head, train_head_DG, train_head_DG_selfMix, train_head_DG_hard, train_head_entropy_hard, train_head_DG_hard_disme
+from rw2s.train import train, train_head, train_head_DG, train_head_DG_selfMix, train_head_DG_hard, train_head_entropy_hard, train_head_DG_hard_disme, train_head_DG_mixup
 from rw2s.vision.data import get_data, filter_dl_by_metadata, get_dataloader, get_filtered_dataset
 from rw2s.vision.models import get_model, freeze_backbone, LinearProbeClassifier
 from rw2s.vision.ensemble import Ensemble, EnsembleParticipant, EnsembleDisagreementSchedule
@@ -466,6 +466,32 @@ def run_w2s(cfg, logger, dls, n_classes, results, teacher_model, student_model, 
             )
         elif cfg["selfMix"]=="disme":
             results, student_model_probe = train_head_DG_hard_disme(
+                teacher_model=teacher_model,
+                student_model=student_model,
+                val_dataloader=teacher_dl, # val_dataloader=dls["val"],
+                test_dataloader=test_dl, # test_dataloader=dls[cfg["w2s"]["test_data_key"]],
+                cfg=cfg,
+                cached_labels_path=cached_labels_path,
+                cached_embs_path=cached_embs_path,
+                logger=logger,
+                results=results,
+                rng=np.random.default_rng(cfg["seed"]),
+                n_classes=n_classes,
+                return_data=False,
+                additional_eval_data=None if not cfg["w2s"]["eval_on_id_val_data"] else {
+                    "id_val_all": (student_model_probe_data["x"], student_model_probe_data["y"]),
+                    "id_val_all_weak": (student_model_probe_data["x"], torch.argmax(student_model_probe_data["yw"], dim=1)),
+                    "id_val_val": (student_model_probe_data["x_val"], student_model_probe_data["y_val"]),
+                    "id_val_val_weak": (student_model_probe_data["x_val"], student_model_probe_data["yw_val"]),
+                    "id_val_test": (student_model_probe_data["x_test"], student_model_probe_data["y_test"]),
+                    "id_val_test_weak": (student_model_probe_data["x_test"], student_model_probe_data["yw_test"]),
+                },
+                before_optim_run_callback_weak=before_optim_run_callback_weak,
+                before_batch_callback_weak=before_batch_callback_weak,
+                after_batch_callback_weak=after_batch_callback_weak,
+            )
+        elif cfg["selfMix"]=="mixup":
+            results, student_model_probe = train_head_DG_mixup(
                 teacher_model=teacher_model,
                 student_model=student_model,
                 val_dataloader=teacher_dl, # val_dataloader=dls["val"],

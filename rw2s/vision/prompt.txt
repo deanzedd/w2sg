@@ -1,0 +1,17 @@
+Please read the function `train_logreg_hard()` in `train.py`, specifically focusing on Phase 2 around lines 1689-1710. 
+
+I need you to create a new function called `train_logreg_hard_v2()` that strictly maintains the overall structure and pipeline of the original `train_logreg_hard()`, but modifies the logic in Phase 2.
+
+Here is the specific logic update for Phase 2:
+After filtering the data based on `w2sg confidence` into a "high confidence" group and a "low confidence" group, apply the following transformation to the low confidence samples:
+
+1. Let (x, y) be an embedding and its weak label from the LOW confidence group.
+2. Let (a, b) be an embedding and its weak label from the HIGH confidence group.
+3. For each embedding `x` in the low confidence group, find its nearest neighbor `a` in the high confidence group using **cosine similarity**.
+4. Once the closest `a` is found, retrieve its corresponding weak label `b`.
+5. Re-label the low confidence sample `x` from (x, y) -> (x, y'), where `y'` is generated using the **Mixup algorithm** between `y` and `b`. 
+   - Formula: `y' = lambda * y + (1 - lambda) * b`
+   - Please add a `mixup_alpha` parameter to the function signature (default to 0.5) to control the Beta distribution for lambda, or just use a fixed lambda if simpler, but ensure the mixup logic is standard.
+6. Replace the old labels of the low confidence group with these new `y'` labels, and then merge the groups back together to proceed with the rest of the original training logic.
+
+Please write the complete `train_logreg_hard_v2()` function. Use efficient PyTorch/NumPy tensor operations for the cosine similarity computation (e.g., matrix multiplication) to avoid slow for-loops.
