@@ -1,4 +1,4 @@
-seed: 2
+seed: 0
 device: 0
 track_in_wandb: false
 save_path: "/home/adminn/theanh28/raven/w2s"

@@ -15,15 +15,18 @@ data:
   subsplit_val: [0.8, 0.2]
   subsplit_test: [0.8, 0.2]
   data_key: "id_val"
-  teacher_domain: 3
-  test_domain: 0
+  DG_domain: 2 #3:source, finetune, test là 3 domain khác nhau, 2: source, domain là cùng 1 domain, test là domain còn lại 
+  train_domain: 2 #source domain
+  teacher_domain: 1
+  test_domain: 3
 
 ensemble:
   ### ensemble weights optimization
   ensemble_weights_opter_cfg:
     lr: 0 # 1e-3 # lr=0 => adaptive weights turned off
   ensemble_weights_init: "uniform" # "uniform", "random", "entropy"
-  ensemble_weights_per_sample: false # if true, each sample has its own set of ensemble weights
+  ### per_sample: false muốn weight ổn định ko bị overfit, true: muốn model tự học sample nên tin model nào 
+  ensemble_weights_per_sample: false # if true, each sample has its own set of ensemble weights # nếu per_sample=True. Điều này có nghĩa là weights được reset và khởi tạo lại mỗi epoch khi per_sample=True.
   reset_ensemble_weights_at_epoch_end_to_uniform: false
   ensemble_weights_freeze_first_frac_of_epochs:      # easy-sample guided initialization: set to the fraction of epochs where you want to train only on easy samples
   save_ensemble_weights: "all" # "none", "all", "last" (for analysis)
@@ -34,7 +37,7 @@ ensemble:
   - model_name: "alexnet"
     pretrained: false
       #load_ckpt: null
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/office_home/models/12_seed0_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/office_home/models/train0_seed0.pt"
     freeze_backbone: false
     train: false
     train_cfg:
@@ -54,12 +57,12 @@ ensemble:
       scheduler_mul_factor:        # only for "multiplicative" scheduler_name
   - model_name: "alexnet"
     pretrained: false
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/office_home/models/12_seed1_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/office_home/models/train1_seed0.pt"
     train: false
     freeze_backbone: false
   - model_name: "alexnet"
     pretrained: false
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/office_home/models/12_seed2_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/office_home/models/train2_seed0.pt"
     train: false
     freeze_backbone: false
 

@@ -541,7 +541,7 @@ def train_head_DG_hard(
     }
     logger.info(f"Hard curriculum params: {hard_curriculum_kwargs}")
 
-    results_teacher_to_student, student_model_probe = train_logreg_hard_v1(
+    results_teacher_to_student, student_model_probe = train_logreg_hard(
         x_train, yw_train, eval_datasets, device=cfg["device"],
         batch_size=cfg["w2s"]["batch_size"],
         loss_fn=LOSS_DICT[cfg["w2s"]["teacher_labels_loss_fn_name"]](**(cfg["w2s"]["teacher_labels_loss_fn_kwargs"] or dict())),

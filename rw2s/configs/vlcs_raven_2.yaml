@@ -3,7 +3,7 @@ device: 0
 track_in_wandb: false
 save_path: "/home/adminn/theanh28/raven/w2s"
 setting_DG: true # if true, train/val/test splits are done within the DG train set(finetuning and target data is different domain); if false, they are done within the OOD test set (finetune and domain target data: 1 domain)
-selfMix: "" # "selfMix", "entropy_hard", "hard", "disme", "mixup", "" (none)
+selfMix: "hard" # "selfMix", "entropy_hard", "hard", "disme", "mixup", "" (none)
 
 
 data:
@@ -15,6 +15,8 @@ data:
   subsplit_val: [0.8, 0.2]
   subsplit_test: [0.8, 0.2]
   data_key: "id_val"
+  DG_domain: 2 #3:source, finetune, test là 3 domain khác nhau, 2: source, domain là cùng 1 domain, test là domain còn lại 
+  train_domain: 2 #source domain
   teacher_domain: 1
   test_domain: 2
 
@@ -34,7 +36,7 @@ ensemble:
   - model_name: "alexnet"
     pretrained: false
       #load_ckpt: null
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/30_seed0_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/013_seed0.pt"
     freeze_backbone: false
     train: false
     train_cfg:
@@ -54,12 +56,12 @@ ensemble:
       scheduler_mul_factor:        # only for "multiplicative" scheduler_name
   - model_name: "alexnet"
     pretrained: false
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/30_seed1_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/013_seed1.pt"
     train: false
     freeze_backbone: false
   - model_name: "alexnet"
     pretrained: false
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/30_seed2_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/vlcs/models/013_seed2.pt"
     train: false
     freeze_backbone: false
 

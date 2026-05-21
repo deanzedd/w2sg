@@ -15,8 +15,10 @@ data:
   subsplit_val: [0.8, 0.2]
   subsplit_test: [0.8, 0.2]
   data_key: "id_val"
+  DG_domain: 2 #3:source, finetune, test là 3 domain khác nhau, 2: source, domain là cùng 1 domain, test là domain còn lại 
+  train_domain: 2 #source domain
   teacher_domain: 3
-  test_domain: 0
+  test_domain: 3
 
 ensemble:
   ### ensemble weights optimization
@@ -34,7 +36,7 @@ ensemble:
   - model_name: "alexnet"
     pretrained: false
       #load_ckpt: null
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/pacs/models/12_seed0_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/pacs/models/train0_seed0.pt"
     freeze_backbone: false
     train: false
     train_cfg:
@@ -54,12 +56,12 @@ ensemble:
       scheduler_mul_factor:        # only for "multiplicative" scheduler_name
   - model_name: "alexnet"
     pretrained: false
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/pacs/models/12_seed1_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/pacs/models/train1_seed0.pt"
     train: false
     freeze_backbone: false
   - model_name: "alexnet"
     pretrained: false
-    load_ckpt: "/home/adminn/theanh28/raven/w2s/pacs/models/12_seed2_pt.pt"
+    load_ckpt: "/home/adminn/theanh28/raven/w2s/pacs/models/train2_seed0.pt"
     train: false
     freeze_backbone: false
 

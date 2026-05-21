@@ -28,3 +28,9 @@ bash run_w2s_multi_seed.sh oh_raven_0
 bash run_w2s_multi_seed.sh oh_raven_1
 bash run_w2s_multi_seed.sh oh_raven_2
 bash run_w2s_multi_seed.sh oh_raven_3
+
+
+### train model 
+# bash run_w2s_multi_seed.sh pacs_weak
+# bash run_w2s_multi_seed.sh vlcs_weak
+# bash run_w2s_multi_seed.sh oh_weak

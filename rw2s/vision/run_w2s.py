@@ -188,6 +188,7 @@ def get_weak_model(cfg, model_cfg, logger, wdb_run, n_classes, model_idx=None):
             val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
         elif cfg["data"]["name"] == "pacs":
             # train_dataset = dsets["test"]
+            # train_dataset = dsets["teacher_data"]
             # chỉnh để train 1 domain
             total_len = len(train_dataset)
             train_len = int(0.8 * total_len)
@@ -198,6 +199,7 @@ def get_weak_model(cfg, model_cfg, logger, wdb_run, n_classes, model_idx=None):
             val_dl = DataLoader(val_subset, batch_size=cfg["data"]["batch_size"], shuffle=False, num_workers=cfg["data"]["n_threads"], pin_memory=True)
         elif cfg["data"]["name"] == "vlcs":
             # train_dataset = dsets["test"]
+            # train_dataset = dsets["teacher_data"]
             # chỉnh để train 1 domain
             total_len = len(train_dataset)
             train_len = int(0.8 * total_len)
@@ -209,8 +211,8 @@ def get_weak_model(cfg, model_cfg, logger, wdb_run, n_classes, model_idx=None):
         elif cfg["data"]["name"] == "office_home":
             train_dl = dls["train"]
             val_dl = dls["val_train"]
-            
-            train_dataset = dsets["test"]
+            # train_dataset = dsets["teacher_data"]
+            # train_dataset = dsets["test"]
             # chỉnh để train 1 domain
             total_len = len(train_dataset)
             train_len = int(0.8 * total_len)
@@ -622,32 +624,7 @@ def main(cfg_path: str):
     dsets, dls = get_data(cfg=cfg["data"])
     n_classes = dsets[tuple(dsets.keys())[0]].n_classes if hasattr(dsets[tuple(dsets.keys())[0]], "n_classes") else len(dsets[tuple(dsets.keys())[0]].classes)
 
-    # ### ---------------- THÊM MỚI: LỌC DOMAIN CHO W2S ---------------- ###
-    # meta_key = cfg["data"].get("domain_group", "hospital") # Mặc định hospital cho Camelyon17
     
-    # # 1. Lọc Finetuning Data (dùng cho Student model)
-    # if cfg["w2s"].get("finetune_domain_idxs") is not None:
-    #     logger.info(f"Filtering W2S Finetuning data to domains: {cfg['w2s']['finetune_domain_idxs']}")
-    #     id_val_key = cfg["w2s"]["id_val_data_key"]
-    #     dls[id_val_key], _ = filter_dl_by_metadata(
-    #         dataloader=dls[id_val_key],
-    #         meta_key=meta_key,
-    #         meta_start_end_idxs=cfg["w2s"]["finetune_domain_idxs"]
-    #     )
-
-    # # 2. Lọc Target Data (dùng để Test Student model)
-    # if cfg["w2s"].get("target_domain_idxs") is not None:
-    #     logger.info(f"Filtering W2S Target data to domains: {cfg['w2s']['target_domain_idxs']}")
-    #     test_key = cfg["w2s"]["test_data_key"]
-    #     dls[test_key], _ = filter_dl_by_metadata(
-    #         dataloader=dls[test_key],
-    #         meta_key=meta_key,
-    #         meta_start_end_idxs=cfg["w2s"]["target_domain_idxs"]
-    #     )
-    # ### -------------------------------------------------------------- ###
-
-
-
     ### load weak ensemble
     weak_ensemble = get_ensemble(cfg=cfg, logger=logger, wdb_run=wdb_run, dls=dls, n_classes=n_classes)
 
